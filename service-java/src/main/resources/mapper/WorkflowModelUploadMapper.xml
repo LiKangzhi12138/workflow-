@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.workflow.mapper.WorkflowModelUploadMapper">
+
+    <resultMap id="WorkflowModelUploadResultMap" type="com.workflow.entity.WorkflowModelUpload">
+        <id column="id" property="id"/>
+        <result column="workflow_id" property="workflowId"/>
+        <result column="uploader_id" property="uploaderId"/>
+        <result column="model_asset_id" property="modelAssetId"/>
+        <result column="server_model_asset_id" property="serverModelAssetId"/>
+        <result column="federated_round" property="federatedRound"/>
+        <result column="federated_weight" property="federatedWeight"/>
+        <result column="aggregation_status" property="aggregationStatus"/>
+        <result column="client_display_name" property="clientDisplayName"/>
+        <result column="original_filename" property="originalFilename"/>
+        <result column="stored_filename" property="storedFilename"/>
+        <result column="encrypted_file_path" property="encryptedFilePath"/>
+        <result column="decrypted_file_path" property="decryptedFilePath"/>
+        <result column="file_size" property="fileSize"/>
+        <result column="file_sha256" property="fileSha256"/>
+        <result column="aes_key_base64" property="aesKeyBase64"/>
+        <result column="aes_iv_base64" property="aesIvBase64"/>
+        <result column="upload_token" property="uploadToken"/>
+        <result column="token_expire_at" property="tokenExpireAt"/>
+        <result column="upload_status" property="uploadStatus"/>
+        <result column="error_message" property="errorMessage"/>
+        <result column="uploaded_at" property="uploadedAt"/>
+        <result column="is_deleted" property="isDeleted"/>
+        <result column="created_at" property="createdAt"/>
+        <result column="updated_at" property="updatedAt"/>
+    </resultMap>
+
+    <select id="selectTrackedById" resultMap="WorkflowModelUploadResultMap">
+        SELECT
+            id,
+            workflow_id,
+            uploader_id,
+            model_asset_id,
+            server_model_asset_id,
+            federated_round,
+            federated_weight,
+            aggregation_status,
+            client_display_name,
+            original_filename,
+            stored_filename,
+            encrypted_file_path,
+            decrypted_file_path,
+            file_size,
+            file_sha256,
+            aes_key_base64,
+            aes_iv_base64,
+            upload_token,
+            token_expire_at,
+            upload_status,
+            error_message,
+            uploaded_at,
+            is_deleted,
+            created_at,
+            updated_at
+        FROM workflow_model_upload
+        WHERE id = #{id}
+        LIMIT 1
+    </select>
+
+    <update id="updateDecryptResult" parameterType="com.workflow.entity.WorkflowModelUpload">
+        UPDATE workflow_model_upload
+        SET decrypted_file_path = #{decryptedFilePath},
+            server_model_asset_id = #{serverModelAssetId},
+            upload_status = #{uploadStatus},
+            aggregation_status = #{aggregationStatus},
+            error_message = #{errorMessage},
+            updated_at = NOW()
+        WHERE id = #{id}
+    </update>
+
+    <update id="updateDecryptFailure">
+        UPDATE workflow_model_upload
+        SET decrypted_file_path = CASE
+                WHEN #{decryptedFilePath} IS NULL OR #{decryptedFilePath} = '' THEN decrypted_file_path
+                ELSE #{decryptedFilePath}
+            END,
+            server_model_asset_id = NULL,
+            upload_status = 'FAILED',
+            aggregation_status = 'FAILED',
+            error_message = #{errorMessage},
+            updated_at = NOW()
+        WHERE id = #{id}
+    </update>
+</mapper>

@@ -1,0 +1,97 @@
+# Environment / secrets
+.env
+.env.*
+!.env.example
+!.env.template
+!.env.*.template
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Frontend / Node
+/frontend-web/node_modules/
+/frontend-web/dist/
+/frontend-web/dist-ssr/
+/frontend-web/.vite/
+/frontend-web/coverage/
+/frontend-web/.eslintcache
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Java / Maven
+**/target/
+*.class
+**/.m2/
+**/.m2repo/
+/.m2home/
+
+# Python
+**/__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+*.egg-info/
+/service-python/build/
+/service-python/dist/
+
+# IDE / local tooling / OS
+**/.idea/
+/.vscode/
+/.agents/
+/.codex/
+/.sandbox-home/
+*.iml
+*.iws
+*.ipr
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs / temporary files
+*.log
+*.log.*
+*.tmp
+*.bak
+*.swp
+*~
+**/logs/*
+!**/logs/README.md
+!**/logs/.gitkeep
+
+# Docker and application runtime data
+/.runtime/
+/storage/dev/*
+!/storage/dev/README.md
+!/storage/dev/.gitkeep
+/service-java/storage/*
+!/service-java/storage/README.md
+!/service-java/storage/.gitkeep
+/service-python/app/storage/*
+!/service-python/app/storage/README.md
+!/service-python/app/storage/.gitkeep
+**/mysql-data/
+
+# Test runner bootstrap artifacts
+/service-java/mockitoboot*.jar
+
+# Local database files and database exports
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+/dump-*.sql
+
+# Model/checkpoint files are intentionally not ignored globally.
+# Runtime models, uploads, encrypted files, federated outputs, and validation
+# artifacts are covered by .runtime/, storage/dev/, and app/storage/ above.

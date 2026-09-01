@@ -1,0 +1,64 @@
+html,
+body,
+#app {
+  width: 100%;
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #f5f7fb;
+}
+
+button,
+input,
+textarea,
+.el-button,
+.el-input__inner,
+.el-textarea__inner {
+  font-family: inherit;
+}
+
+.el-dialog {
+  max-width: calc(100vw - 32px);
+}
+
+.el-drawer {
+  max-width: 92vw;
+}
+
+.el-table .cell {
+  line-height: 1.55;
+}
+
+.el-descriptions__label {
+  white-space: nowrap;
+}
+
+.el-descriptions__content {
+  word-break: break-word;
+}
+
+.el-message-box {
+  max-width: calc(100vw - 32px);
+}
+
+.el-card {
+  border-radius: 8px;
+}
+
+.el-tag {
+  max-width: 100%;
+  white-space: normal;
+  line-height: 1.35;
+  height: auto;
+  min-height: 24px;
+  align-items: center;
+}
+
+.long-text,
+.path-text,
+.error-text {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}

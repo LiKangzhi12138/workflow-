@@ -1,0 +1,17 @@
+.git
+.env
+.m2
+.m2home
+.m2repo
+.sandbox-home
+storage
+docs
+frontend-web/node_modules
+frontend-web/dist
+service-java/target
+service-python/__pycache__
+service-python/app/__pycache__
+service-python/app/storage
+.runtime
+**/.DS_Store
+**/Thumbs.db

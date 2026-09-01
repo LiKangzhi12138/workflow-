@@ -1,0 +1,71 @@
+server:
+  address: ${SERVER_ADDRESS:0.0.0.0}
+  port: ${SERVER_PORT:8080}
+  forward-headers-strategy: framework
+  servlet:
+    session:
+      timeout: ${SESSION_TIMEOUT:8h}
+      cookie:
+        name: ${SESSION_COOKIE_NAME:WORKFLOWSESSION}
+        http-only: true
+        same-site: ${SESSION_COOKIE_SAME_SITE:Lax}
+        secure: ${SESSION_COOKIE_SECURE:false}
+  tomcat:
+    connection-timeout: ${SERVER_TOMCAT_CONNECTION_TIMEOUT:600000}
+    max-swallow-size: -1
+
+spring:
+  application:
+    name: service-java
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:mysql://mysql:3306/workflow_platform?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true&useSSL=false}
+    username: ${SPRING_DATASOURCE_USERNAME:workflow}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: ${SPRING_DATASOURCE_HIKARI_MAX_POOL_SIZE:10}
+      minimum-idle: ${SPRING_DATASOURCE_HIKARI_MIN_IDLE:2}
+      connection-timeout: ${SPRING_DATASOURCE_HIKARI_CONNECTION_TIMEOUT:30000}
+      idle-timeout: ${SPRING_DATASOURCE_HIKARI_IDLE_TIMEOUT:600000}
+      max-lifetime: ${SPRING_DATASOURCE_HIKARI_MAX_LIFETIME:1800000}
+  mvc:
+    async:
+      request-timeout: ${SPRING_MVC_ASYNC_REQUEST_TIMEOUT:600000}
+  servlet:
+    multipart:
+      location: ${SPRING_SERVLET_MULTIPART_LOCATION:${WORKFLOW_STORAGE_ROOT:/opt/workflow-platform/storage}/tmp/java-multipart}
+      max-file-size: ${MAX_UPLOAD_SIZE:1024MB}
+      max-request-size: ${MAX_REQUEST_SIZE:1050MB}
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+
+workflow:
+  integration:
+    python-base-url: ${PYTHON_SERVICE_BASE_URL:http://service-python:8000}
+    java-base-url: ${JAVA_CALLBACK_BASE_URL:http://service-java:8080}
+    callback-secret: ${PYTHON_CALLBACK_SECRET:}
+    algorithm-type: ${DEFAULT_ALGORITHM_TYPE:YOLOv10}
+    python-result-root-path: ${PYTHON_VALIDATION_OUTPUT_ROOT:${WORKFLOW_STORAGE_ROOT:/opt/workflow-platform/storage}/python/results}
+    python-sample-root-path: ${PYTHON_VALIDATION_SAMPLE_ROOT:${WORKFLOW_STORAGE_ROOT:/opt/workflow-platform/storage}/python/result-samples}
+    connect-timeout-ms: ${PYTHON_HTTP_CONNECT_TIMEOUT_MS:10000}
+    read-timeout-ms: ${PYTHON_HTTP_READ_TIMEOUT_MS:600000}
+  storage:
+    runtime-mode: ${WORKFLOW_RUNTIME_MODE:local-dev}
+    root-path: ${WORKFLOW_STORAGE_ROOT:/opt/workflow-platform/storage}
+    temp-dir: ${WORKFLOW_TEMP_DIR:${workflow.storage.root-path}/tmp}
+    model-upload-dir: ${WORKFLOW_MODEL_UPLOAD_DIR:${workflow.storage.root-path}/model-uploads}
+    model-root-path: ${WORKFLOW_MODEL_ROOT:${workflow.storage.root-path}/models}
+    dataset-root-path: ${WORKFLOW_DATASET_ROOT:${workflow.storage.root-path}/datasets}
+    validation-cache-root-path: ${WORKFLOW_VALIDATION_CACHE_ROOT:${workflow.storage.root-path}/validation-cache}
+    federated-model-root-path: ${WORKFLOW_FEDERATED_MODEL_ROOT:${workflow.storage.root-path}/federated-models}
+    server-path-import-enabled: ${WORKFLOW_SERVER_PATH_IMPORT_ENABLED:false}
+    server-path-import-roots: ${WORKFLOW_SERVER_PATH_IMPORT_ROOTS:}
+    server-path-mappings: ${WORKFLOW_SERVER_PATH_MAPPINGS:}
+    server-path-import-roles: ${WORKFLOW_SERVER_PATH_IMPORT_ROLES:SERVER}
+  security:
+    allowed-origins: ${APP_ALLOWED_ORIGINS:}
+    allowed-origin-patterns: ${APP_ALLOWED_ORIGIN_PATTERNS:}
+  user-selection:
+    excluded-server-email-domains: ${WORKFLOW_USER_SELECTION_EXCLUDED_SERVER_EMAIL_DOMAINS:example.com}

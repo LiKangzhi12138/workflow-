@@ -1,0 +1,6 @@
+启动
+npm run dev
+端口被占用
+netstat -ano | findstr :5173
+关掉查阅到的PID的进程
+taskkill /PID xxxx /F

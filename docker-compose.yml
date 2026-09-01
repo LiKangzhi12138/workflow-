@@ -1,0 +1,109 @@
+services:
+  gateway:
+    build:
+      context: .
+      dockerfile: frontend-web/Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL}
+        VITE_API_TIMEOUT_MS: ${VITE_API_TIMEOUT_MS}
+    env_file:
+      - ${ENV_FILE_PATH:-.env}
+    environment:
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME}
+      CLIENT_MAX_BODY_SIZE: ${CLIENT_MAX_BODY_SIZE}
+      JAVA_UPSTREAM_URL: ${JAVA_UPSTREAM_URL}
+    depends_on:
+      service-java:
+        condition: service_healthy
+    ports:
+      - "${PUBLIC_HTTP_BIND_IP:-0.0.0.0}:${PUBLIC_HTTP_PORT}:80"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/healthz | grep -q ok"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+
+  service-java:
+    build:
+      context: .
+      dockerfile: service-java/Dockerfile
+    env_file:
+      - ${ENV_FILE_PATH:-.env}
+    depends_on:
+      mysql:
+        condition: service_healthy
+      service-python:
+        condition: service_healthy
+    volumes:
+      - ${HOST_STORAGE_ROOT}:${WORKFLOW_STORAGE_ROOT}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${SERVER_PORT}/api/health > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  service-python:
+    build:
+      context: .
+      dockerfile: service-python/Dockerfile
+    env_file:
+      - ${ENV_FILE_PATH:-.env}
+    volumes:
+      - ${HOST_STORAGE_ROOT}:${WORKFLOW_STORAGE_ROOT}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:${PYTHON_SERVICE_PORT}/internal/ping > /dev/null || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  mysql:
+    image: mysql:8.4
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max_allowed_packet=1073741824
+    environment:
+      TZ: Asia/Shanghai
+      MYSQL_DATABASE: ${MYSQL_DATABASE}
+      MYSQL_USER: ${MYSQL_USER}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    ports:
+      - "${MYSQL_HOST_BIND_IP:-127.0.0.1}:${MYSQL_HOST_PORT}:3306"
+    volumes:
+      - ${HOST_MYSQL_DATA_ROOT}:/var/lib/mysql
+      - ./docker/mysql/init/000_init_workflow_platform_schema.sh:/docker-entrypoint-initdb.d/000_init_workflow_platform_schema.sh:ro
+      - ./docs/sql/000_init_workflow_platform_schema.sql:/opt/workflow-platform-bootstrap/000_init_workflow_platform_schema.sql:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
