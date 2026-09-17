@@ -44,6 +44,9 @@ public class WorkflowStorageProperties {
     @NotBlank
     private String federatedModelRootPath = "/opt/workflow-platform/storage/federated-models";
 
+    @NotBlank
+    private String weightsAssetRootPath = "/opt/workflow-platform/storage/weights-assets";
+
     private boolean serverPathImportEnabled;
 
     private String serverPathImportRoots = "";
@@ -78,6 +81,10 @@ public class WorkflowStorageProperties {
 
     public Path federatedModelRootDirPath() {
         return normalize(federatedModelRootPath);
+    }
+
+    public Path weightsAssetRootDirPath() {
+        return normalize(weightsAssetRootPath);
     }
 
     public List<Path> resolvedServerImportRoots() {

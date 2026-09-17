@@ -1,0 +1,1 @@
+"""Independent YOLO model runtime."""

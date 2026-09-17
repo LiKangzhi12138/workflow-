@@ -1,5 +1,6 @@
 package com.workflow.dto.python;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import lombok.Data;
 
 @Data
@@ -14,4 +15,8 @@ public class PythonCreateJobRequest {
     private String algorithmType;
     private String callbackUrl;
     private String callbackSecret;
+    private String validationMode;
+    private String runtimeProfileId;
+    private JsonNode trustedModelDefinition;
+    private PythonWeightsValidationJobInput globalWeights;
 }

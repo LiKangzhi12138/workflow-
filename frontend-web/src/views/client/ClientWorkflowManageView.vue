@@ -33,7 +33,11 @@
       <el-table v-loading="loading" :data="tableData" border row-key="id">
         <el-table-column prop="workflowCode" label="工作流编码" min-width="180" show-overflow-tooltip />
         <el-table-column prop="workflowName" label="工作流名称" min-width="180" show-overflow-tooltip />
-        <el-table-column prop="yoloVersion" label="YOLO版本" width="120" />
+        <el-table-column label="模型定义" min-width="190" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ getWorkflowModelDisplayName(row) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="clientModelAssetName" label="绑定模型" min-width="180" show-overflow-tooltip />
         <el-table-column prop="serverDatasetAssetName" label="服务端数据集" min-width="180" show-overflow-tooltip />
         <el-table-column prop="serverDatasetDataFormat" label="数据格式" width="110" />
@@ -166,12 +170,140 @@
           </span>
         </el-form-item>
 
-        <el-form-item label="YOLO版本" prop="yoloVersion">
+        <template v-if="modelSelectionMode === 'definition'">
+          <el-form-item v-if="availableModelsLoading">
+            <el-alert
+              title="正在加载服务器可用模型"
+              type="info"
+              :closable="false"
+              show-icon
+            />
+          </el-form-item>
+
+          <el-form-item
+            v-if="!availableModelsLoading && minimalModelSelection.family.options.length > 0"
+            label="模型类型"
+            prop="modelDefinitionId"
+          >
+            <span
+              v-if="minimalModelSelection.family.kind === 'static'"
+              class="model-selection-value"
+            >
+              {{ minimalModelSelection.family.value }}
+            </span>
+            <el-select
+              v-else
+              :model-value="minimalModelSelection.family.value"
+              placeholder="请选择模型类型"
+              style="width: 100%"
+              @change="selectModelFamily"
+            >
+              <el-option
+                v-for="option in minimalModelSelection.family.options"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item v-if="minimalModelSelection.version" label="模型版本">
+            <span
+              v-if="minimalModelSelection.version.kind === 'static'"
+              class="model-selection-value"
+            >
+              {{ minimalModelSelection.version.value }}
+            </span>
+            <el-select
+              v-else
+              :model-value="minimalModelSelection.version.value"
+              placeholder="请选择模型版本"
+              style="width: 100%"
+              @change="selectModelVersion"
+            >
+              <el-option
+                v-for="option in minimalModelSelection.version.options"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item v-if="minimalModelSelection.variant" label="模型规格">
+            <el-select
+              :model-value="minimalModelSelection.variant.value"
+              placeholder="请选择模型规格"
+              style="width: 100%"
+              @change="selectModelVariant"
+            >
+              <el-option
+                v-for="option in minimalModelSelection.variant.options"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item v-if="minimalModelSelection.taskType" label="任务类型">
+            <el-select
+              :model-value="minimalModelSelection.taskType.value"
+              placeholder="请选择任务类型"
+              style="width: 100%"
+              @change="selectModelTaskType"
+            >
+              <el-option
+                v-for="option in minimalModelSelection.taskType.options"
+                :key="option.value"
+                :label="formatTaskType(option.label)"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item v-if="minimalModelSelection.definition" label="模型">
+            <el-select
+              :model-value="minimalModelSelection.definition.value"
+              placeholder="请选择模型"
+              style="width: 100%"
+              filterable
+              @change="selectExactModelDefinition"
+            >
+              <el-option
+                v-for="option in minimalModelSelection.definition.options"
+                :key="option.value"
+                :label="option.label"
+                :value="option.value"
+              />
+            </el-select>
+          </el-form-item>
+
+          <el-form-item v-if="!availableModelsLoading && availableModelDefinitions.length === 0">
+            <el-alert
+              title="当前服务器暂无可用模型"
+              type="warning"
+              :closable="false"
+              show-icon
+            />
+          </el-form-item>
+        </template>
+
+        <el-form-item v-else-if="modelSelectionMode === 'legacy'" label="YOLO版本" prop="yoloVersion">
           <el-select v-model="createForm.yoloVersion" placeholder="请选择YOLO版本" style="width: 100%">
             <el-option label="YOLOv8" value="YOLOv8" />
             <el-option label="YOLOv10" value="YOLOv10" />
             <el-option label="YOLOv11" value="YOLOv11" />
           </el-select>
+        </el-form-item>
+
+        <el-form-item v-else>
+          <el-alert
+            :title="modelSelectionMessage"
+            :type="modelSelectionMode === 'error' ? 'error' : 'info'"
+            :closable="false"
+            show-icon
+          />
         </el-form-item>
 
         <el-form-item label="是否公开">
@@ -232,7 +364,12 @@
 
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="createSubmitting" @click="submitCreate">
+        <el-button
+          type="primary"
+          :loading="createSubmitting"
+          :disabled="createSubmissionBlocked"
+          @click="submitCreate"
+        >
           创建
         </el-button>
       </template>
@@ -265,8 +402,8 @@
             <el-descriptions-item label="模型版本">
               {{ detail.clientModelVersion || '-' }}
             </el-descriptions-item>
-            <el-descriptions-item label="YOLO版本">
-              {{ detail.yoloVersion || '-' }}
+            <el-descriptions-item label="模型定义">
+              {{ getWorkflowModelDisplayName(detail) }}
             </el-descriptions-item>
             <el-descriptions-item label="服务端数据集">
               {{ detail.serverDatasetAssetName || '-' }}
@@ -519,18 +656,29 @@
           <el-upload
             drag
             :auto-upload="false"
-            accept=".pt,.weights,.onnx"
+            :accept="uploadContract.uploadProtocol === 'WEIGHTS_V1' ? '.pt' : '.pt,.weights,.onnx'"
             :limit="1"
             :on-change="handleFileChange"
           >
             <el-icon style="font-size: 40px; color: #409eff"><Upload /></el-icon>
-            <div style="margin-top: 8px; font-size: 14px">拖拽或点击选择 YOLO 模型文件</div>
+            <div style="margin-top: 8px; font-size: 14px">
+              {{ uploadContract.uploadProtocol === 'WEIGHTS_V1'
+                ? '拖拽或点击选择 weights-only 文件'
+                : '拖拽或点击选择 YOLO 模型文件' }}
+            </div>
             <template #tip>
               <div style="color: #909399; font-size: 12px">
-                支持 .pt / .weights / .onnx，最大 500MB
+                {{ uploadContract.uploadProtocol === 'WEIGHTS_V1'
+                  ? '仅接受 packaging tool 生成的 weights.pt，最大 500MB'
+                  : '支持 .pt / .weights / .onnx，最大 500MB' }}
               </div>
             </template>
           </el-upload>
+          <div v-if="uploadContract.uploadProtocol === 'WEIGHTS_V1'" class="upload-tip" style="margin-top: 12px">
+            <div>当前工作流仅接受 packaging tool 生成的 weights-only 包。</div>
+            <label>Manifest <input type="file" accept=".json,application/json" @change="handleManifestFileChange" /></label>
+            <label style="margin-left: 16px">Descriptor <input type="file" accept=".json,application/json" @change="handleDescriptorFileChange" /></label>
+          </div>
           <div v-if="uploadError" style="margin-top: 8px">
             <el-alert type="error" :title="uploadError" show-icon :closable="false" />
           </div>
@@ -672,7 +820,7 @@
           <el-button
             v-if="uploadStep === 0"
             type="primary"
-            :disabled="!uploadFile"
+            :disabled="!uploadPackageReady"
             @click="startEncryptedUpload"
           >
             开始洗牌加密并上传
@@ -687,7 +835,7 @@
           <el-button
             v-if="uploadStep === 0"
             type="primary"
-            :disabled="!uploadFile"
+            :disabled="!uploadPackageReady"
             @click="startEncryptedUpload"
           >
             开始加密上传
@@ -718,14 +866,21 @@ import {
   listWorkflowsApi,
   withdrawWorkflowApi,
   initModelUpload,
+  getWorkflowUploadContract,
   uploadEncryptedModelFile,
   bindLocalModelToWorkflow,
   type ServerUserOption,
   type WorkflowDetail,
   type WorkflowListItem,
-  type WorkflowStatus
+  type WorkflowStatus,
+  type WorkflowUploadContract
 } from '@/api/workflow'
 import { listAllModelAssetsApi, type ModelAssetItem } from '@/api/model'
+import {
+  getModelDefinitionRegistryStatusApi,
+  listAvailableModelDefinitionsApi,
+  type AvailableModelDefinition
+} from '@/api/modelDefinition'
 import {
   computeUploadDialogPercent,
   formatMechanismEnabled,
@@ -734,7 +889,24 @@ import {
   getPrivacyStatusLabel
 } from '@/constants/workflowProgress'
 import { summarizeUiErrorMessage } from '@/utils/errorMessage'
+import {
+  buildWorkflowModelSelectionPayload,
+  normalizeAvailableModelDefinitions,
+  resolveModelSelectionFailure,
+  resolveModelSelectionMode,
+  type ModelSelectionMode
+} from '@/utils/modelDefinitionSelection'
+import {
+  buildMinimalModelSelectionPlan,
+  type MinimalModelSelectionAnswers
+} from '@/utils/minimalModelSelection'
 import { resolveValidPage } from '@/utils/pagination'
+import { getWorkflowModelDisplayName } from '@/utils/workflowModelDisplay'
+import {
+  appendWeightsProtocolMetadata,
+  protocolUploadReady,
+  weightsUploadErrorMessage
+} from '@/utils/weightsPackageUpload'
 
 const router = useRouter()
 const route = useRoute()
@@ -778,12 +950,18 @@ const createDialogVisible = ref(false)
 const createFormRef = ref<FormInstance>()
 const serverUserOptions = ref<ServerUserOption[]>([])
 const modelOptions = ref<ModelAssetItem[]>([])
+const modelSelectionMode = ref<ModelSelectionMode>('loading')
+const availableModelsLoading = ref(false)
+const availableModelDefinitions = ref<AvailableModelDefinition[]>([])
+const modelSelectionMessage = ref('正在加载服务器可用模型')
+const modelSelectionAnswers = reactive<MinimalModelSelectionAnswers>({})
 
 const createForm = reactive({
   workflowName: '',
   serverUserId: undefined as number | undefined,
   clientModelAssetId: undefined as number | undefined,
   clientModelCount: 1,
+  modelDefinitionId: undefined as number | undefined,
   yoloVersion: 'YOLOv10',
   isPublic: 0,
   dpEnabled: true,
@@ -804,6 +982,23 @@ const isPublicSwitch = computed({
   }
 })
 
+const minimalModelSelection = computed(() =>
+  buildMinimalModelSelectionPlan(availableModelDefinitions.value, modelSelectionAnswers)
+)
+
+const createSubmissionBlocked = computed(() => {
+  if (modelSelectionMode.value === 'loading' || modelSelectionMode.value === 'error') return true
+  return modelSelectionMode.value === 'definition' && !createForm.modelDefinitionId
+})
+
+watch(
+  () => minimalModelSelection.value.selectedDefinition?.id,
+  (definitionId) => {
+    createForm.modelDefinitionId = definitionId
+  },
+  { immediate: true }
+)
+
 watch(
   () => createForm.secureAggregationEnabled,
   (enabled) => {
@@ -811,12 +1006,29 @@ watch(
   }
 )
 
+const validateDefinitionSelection = (_rule: unknown, value: unknown, callback: (error?: Error) => void) => {
+  if (modelSelectionMode.value !== 'definition' || Number(value) > 0) {
+    callback()
+    return
+  }
+  callback(new Error('请选择服务器当前可用的模型'))
+}
+
+const validateLegacyVersion = (_rule: unknown, value: unknown, callback: (error?: Error) => void) => {
+  if (modelSelectionMode.value !== 'legacy' || String(value || '').trim()) {
+    callback()
+    return
+  }
+  callback(new Error('请选择 YOLO 版本'))
+}
+
 const createRules: FormRules = {
   workflowName: [{ required: true, message: '请输入工作流名称', trigger: 'blur' }],
   serverUserId: [{ required: true, message: '请选择服务端用户', trigger: 'change' }],
   clientModelAssetId: [{ required: true, message: '请选择客户端模型', trigger: 'change' }],
   clientModelCount: [{ required: true, message: '请输入客户端模型数量', trigger: 'change' }],
-  yoloVersion: [{ required: true, message: '请选择 YOLO 版本', trigger: 'change' }]
+  modelDefinitionId: [{ validator: validateDefinitionSelection, trigger: 'change' }],
+  yoloVersion: [{ validator: validateLegacyVersion, trigger: 'change' }]
 }
 
 const detailDrawerVisible = ref(false)
@@ -874,6 +1086,52 @@ function formatDateTime(value?: string) {
   return value.replace('T', ' ')
 }
 
+function formatTaskType(taskType?: string) {
+  const labels: Record<string, string> = {
+    DETECTION: '目标检测',
+    SEMANTIC_SEGMENTATION: '语义分割'
+  }
+  return taskType ? labels[taskType] || taskType : '-'
+}
+
+function clearDefinitionSelectionAnswers() {
+  modelSelectionAnswers.modelFamily = undefined
+  modelSelectionAnswers.version = undefined
+  modelSelectionAnswers.variant = undefined
+  modelSelectionAnswers.taskType = undefined
+  modelSelectionAnswers.definitionId = undefined
+}
+
+function selectModelFamily(value: string) {
+  modelSelectionAnswers.modelFamily = value
+  modelSelectionAnswers.version = undefined
+  modelSelectionAnswers.variant = undefined
+  modelSelectionAnswers.taskType = undefined
+  modelSelectionAnswers.definitionId = undefined
+}
+
+function selectModelVersion(value: string) {
+  modelSelectionAnswers.version = value
+  modelSelectionAnswers.variant = undefined
+  modelSelectionAnswers.taskType = undefined
+  modelSelectionAnswers.definitionId = undefined
+}
+
+function selectModelVariant(value: string) {
+  modelSelectionAnswers.variant = value
+  modelSelectionAnswers.taskType = undefined
+  modelSelectionAnswers.definitionId = undefined
+}
+
+function selectModelTaskType(value: string) {
+  modelSelectionAnswers.taskType = value
+  modelSelectionAnswers.definitionId = undefined
+}
+
+function selectExactModelDefinition(value: number) {
+  modelSelectionAnswers.definitionId = value
+}
+
 function formatMetrics(metricsJson?: string) {
   if (!metricsJson) return '-'
   try {
@@ -888,6 +1146,8 @@ function resetCreateForm() {
   createForm.serverUserId = undefined
   createForm.clientModelAssetId = undefined
   createForm.clientModelCount = 1
+  createForm.modelDefinitionId = undefined
+  clearDefinitionSelectionAnswers()
   createForm.yoloVersion = 'YOLOv10'
   createForm.isPublic = 0
   createForm.dpEnabled = true
@@ -955,23 +1215,70 @@ async function loadModelOptions() {
   }
 }
 
+async function loadAvailableModelDefinitions() {
+  availableModelsLoading.value = true
+  availableModelDefinitions.value = []
+  createForm.modelDefinitionId = undefined
+  clearDefinitionSelectionAnswers()
+  try {
+    const response = await listAvailableModelDefinitionsApi()
+    availableModelDefinitions.value = normalizeAvailableModelDefinitions(response.data)
+    if (availableModelDefinitions.value.length === 0) {
+      modelSelectionMessage.value = '当前服务器暂无可用模型'
+    }
+  } catch (error: any) {
+    const failure = resolveModelSelectionFailure(error.message)
+    modelSelectionMode.value = failure.mode
+    modelSelectionMessage.value = failure.message
+  } finally {
+    availableModelsLoading.value = false
+  }
+}
+
+async function loadModelSelectionMode() {
+  modelSelectionMode.value = 'loading'
+  modelSelectionMessage.value = '正在加载服务器可用模型'
+  availableModelDefinitions.value = []
+  try {
+    const response = await getModelDefinitionRegistryStatusApi()
+    modelSelectionMode.value = resolveModelSelectionMode(response.data?.enabled === true)
+    if (modelSelectionMode.value === 'definition') {
+      await loadAvailableModelDefinitions()
+      return
+    }
+  } catch (error: any) {
+    const failure = resolveModelSelectionFailure(error.message)
+    modelSelectionMode.value = failure.mode
+    modelSelectionMessage.value = failure.message
+  }
+}
+
 async function openCreateDialog() {
   createDialogVisible.value = true
-  await Promise.all([loadServerUsers(), loadModelOptions()])
+  await Promise.all([loadServerUsers(), loadModelOptions(), loadModelSelectionMode()])
 }
 
 async function submitCreate() {
+  if (createSubmissionBlocked.value) {
+    ElMessage.warning(modelSelectionMessage.value || '当前模型选择不可用')
+    return
+  }
   const valid = await createFormRef.value?.validate().catch(() => false)
   if (!valid) return
 
   createSubmitting.value = true
   try {
+    const modelSelection = buildWorkflowModelSelectionPayload(
+      modelSelectionMode.value,
+      createForm.modelDefinitionId,
+      createForm.yoloVersion
+    )
     await createWorkflowApi({
       workflowName: createForm.workflowName,
       serverUserId: Number(createForm.serverUserId),
       clientModelAssetId: Number(createForm.clientModelAssetId),
       clientModelCount: Number(createForm.clientModelCount),
-      yoloVersion: createForm.yoloVersion,
+      ...modelSelection,
       isPublic: createForm.isPublic,
       dpEnabled: createForm.dpEnabled,
       dpEpsilon: Number(createForm.dpEpsilon),
@@ -1094,6 +1401,20 @@ const uploadStep = ref(0) // 0=选择文件 1=计算SHA256 2=获取密钥 3=加�
 const uploadProgress = ref(0)
 const uploadError = ref('')
 const fileSha256Preview = ref('')
+const uploadContract = ref<WorkflowUploadContract>({
+  workflowId: 0,
+  uploadProtocol: 'LEGACY_CHECKPOINT',
+  manifestRequired: false,
+  descriptorRequired: false,
+  acceptedArtifactType: 'FULL_CHECKPOINT'
+})
+const uploadManifestFile = ref<File | null>(null)
+const uploadDescriptorFile = ref<File | null>(null)
+const uploadPackageReady = computed(() => protocolUploadReady(
+  uploadContract.value.uploadProtocol,
+  uploadFile.value,
+  { manifest: uploadManifestFile.value, descriptor: uploadDescriptorFile.value }
+))
 
 // 本地模型资产相关
 const uploadMode = ref<'local' | 'file'>('local')
@@ -1140,8 +1461,18 @@ const openUploadDialog = async (row: WorkflowListItem, replaceExisting: boolean 
   uploadProgress.value = 0
   uploadError.value = ''
   fileSha256Preview.value = ''
+  uploadManifestFile.value = null
+  uploadDescriptorFile.value = null
   selectedModelAssetId.value = row.clientModelAssetId ?? null
   bindingLocal.value = false
+
+  try {
+    const response = await getWorkflowUploadContract(row.id)
+    uploadContract.value = response.data
+  } catch (error) {
+    uploadError.value = '无法读取当前工作流上传协议，请稍后重试。'
+    return
+  }
 
   // 加载当前用户的模型资产列表（file_path_validated = 1 的）
   try {
@@ -1184,6 +1515,14 @@ const handleBindLocalModel = async () => {
 
 const handleFileChange = (uploadFileObj: any) => {
   uploadFile.value = uploadFileObj.raw
+}
+
+const handleManifestFileChange = (event: Event) => {
+  uploadManifestFile.value = (event.target as HTMLInputElement).files?.[0] || null
+}
+
+const handleDescriptorFileChange = (event: Event) => {
+  uploadDescriptorFile.value = (event.target as HTMLInputElement).files?.[0] || null
 }
 
 const legacyStartEncryptedUpload = async () => {
@@ -1415,6 +1754,10 @@ const startEncryptedUpload = async () => {
     uploadProgress.value = 0
     const formData = new FormData()
     formData.append('file', preparedPayload.uploadBlob, preparedPayload.uploadFilename)
+    await appendWeightsProtocolMetadata(formData, initData.uploadProtocol, {
+      manifest: uploadManifestFile.value,
+      descriptor: uploadDescriptorFile.value
+    })
     console.info('[workflow-upload] file upload start', {
       workflowId: workflow.id,
       uploadId,
@@ -1446,7 +1789,10 @@ const startEncryptedUpload = async () => {
       loadList()
     }, 1500)
   } catch (error) {
-    uploadError.value = resolveWorkflowUploadErrorMessage(currentStage, error)
+    const raw = error instanceof Error ? error.message : String(error || '')
+    uploadError.value = uploadContract.value.uploadProtocol === 'WEIGHTS_V1'
+      ? weightsUploadErrorMessage(raw)
+      : resolveWorkflowUploadErrorMessage(currentStage, error)
     console.error('[workflow-upload] failed', {
       workflowId: workflow.id,
       filename: file.name,
@@ -1540,6 +1886,11 @@ onMounted(async () => {
 
 .workflow-detail-descriptions :deep(.el-progress) {
   min-width: 180px;
+}
+
+.model-selection-value {
+  color: #606266;
+  line-height: 32px;
 }
 
 :deep(.el-table .el-button + .el-button) {

@@ -6,6 +6,7 @@ import com.workflow.config.WorkflowStorageProperties;
 import com.workflow.dto.python.PythonCreateJobRequest;
 import com.workflow.dto.python.PythonCreateJobResponse;
 import com.workflow.dto.python.PythonCreateJobResponseData;
+import com.workflow.dto.python.PythonWeightsValidationJobInput;
 import com.workflow.dto.workflow.WorkflowDetailVO;
 import com.workflow.entity.DatasetAsset;
 import com.workflow.entity.SysUser;
@@ -78,6 +79,10 @@ class WorkflowServiceImplStartPythonJobTest {
     private ValidationResultService validationResultService;
     @Mock
     private ResultArtifactCleanupService resultArtifactCleanupService;
+    @Mock
+    private WorkflowModelDefinitionSelectionService workflowModelDefinitionSelectionService;
+    @Mock
+    private WorkflowWeightsValidationPreparationService weightsValidationPreparationService;
 
     private WorkflowServiceImpl workflowService;
 
@@ -108,7 +113,9 @@ class WorkflowServiceImplStartPythonJobTest {
                 workflowFederatedAggregationService,
                 validationImageCacheService,
                 validationResultService,
-                resultArtifactCleanupService
+                resultArtifactCleanupService,
+                workflowModelDefinitionSelectionService,
+                weightsValidationPreparationService
         );
 
         SysUser currentServerUser = new SysUser();
@@ -160,6 +167,56 @@ class WorkflowServiceImplStartPythonJobTest {
         assertEquals(globalModelPath.toString(), requestCaptor.getValue().getModelPath());
         assertEquals(datasetDir.toString(), requestCaptor.getValue().getDatasetPath());
         verify(workflowModelUploadMapper, never()).selectList(any());
+    }
+
+    @Test
+    void shouldRouteFederatedWeightsV1WithoutCallingLegacyResolver() throws Exception {
+        Workflow workflow = buildWorkflow();
+        workflow.setModelDefinitionId(1L);
+        workflow.setFederatedStrategy(WorkflowWeightsFederatedAggregationService.STRATEGY);
+        Path weightsPath = tempDir.resolve("federated-models").resolve("global_weights.pt");
+        Files.createDirectories(weightsPath.getParent());
+        Files.writeString(weightsPath, "weights-v1");
+        when(workflowMapper.selectOne(any())).thenReturn(workflow);
+        when(weightsValidationPreparationService.isV1Workflow(workflow)).thenReturn(true);
+
+        PythonWeightsValidationJobInput globalWeights = new PythonWeightsValidationJobInput();
+        globalWeights.setAssetId(77L);
+        globalWeights.setWeightsPath(weightsPath.toString());
+        globalWeights.setExpectedSha256("a".repeat(64));
+        var trustedDefinition = new ObjectMapper().readTree("{\"definitionId\":\"YOLOV8N_SHEEP_V1\"}");
+        when(weightsValidationPreparationService.prepare(workflow)).thenReturn(
+                new WorkflowWeightsValidationPreparationService.PreparedValidation(
+                        weightsPath.toString(), "YOLO_RUNTIME_V1", trustedDefinition, globalWeights
+                )
+        );
+
+        Path datasetDir = tempDir.resolve("dataset-v1");
+        Files.createDirectories(datasetDir);
+        DatasetAsset datasetAsset = new DatasetAsset();
+        datasetAsset.setId(20L);
+        datasetAsset.setFilePath(datasetDir.toString());
+        datasetAsset.setIsDeleted(0);
+        when(datasetAssetMapper.selectOne(any())).thenReturn(datasetAsset);
+
+        PythonCreateJobResponse response = new PythonCreateJobResponse();
+        response.setCode("OK");
+        PythonCreateJobResponseData responseData = new PythonCreateJobResponseData();
+        responseData.setJobId("py-v1-job");
+        responseData.setStatus("ACCEPTED");
+        response.setData(responseData);
+        when(pythonJobClient.createJob(any(PythonCreateJobRequest.class))).thenReturn(response);
+
+        workflowService.startPythonJob(workflow.getId());
+
+        ArgumentCaptor<PythonCreateJobRequest> requestCaptor = ArgumentCaptor.forClass(PythonCreateJobRequest.class);
+        verify(pythonJobClient).createJob(requestCaptor.capture());
+        PythonCreateJobRequest request = requestCaptor.getValue();
+        assertEquals("WEIGHTS_PROTOCOL_V1", request.getValidationMode());
+        assertEquals("YOLO_RUNTIME_V1", request.getRuntimeProfileId());
+        assertEquals("YOLOV8N_SHEEP_V1", request.getTrustedModelDefinition().path("definitionId").asText());
+        assertEquals(77L, request.getGlobalWeights().getAssetId());
+        verify(workflowFederatedAggregationService, never()).resolveFederatedModelAvailability(workflow);
     }
 
     @Test

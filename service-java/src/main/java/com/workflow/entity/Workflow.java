@@ -26,6 +26,8 @@ public class Workflow {
 
     private Long clientModelAssetId;
 
+    private Long modelDefinitionId;
+
     private Long serverDatasetAssetId;
 
     private Integer clientModelCount;

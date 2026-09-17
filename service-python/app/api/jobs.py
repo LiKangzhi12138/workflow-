@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.core.logger import logger
 from app.models.request_models import (
     CreateJobRequest,
+    WEIGHTS_PROTOCOL_V1,
     STANDALONE_VALIDATION,
     WORKFLOW_VALIDATION,
 )
@@ -22,6 +23,16 @@ def validate_create_job_request(req: CreateJobRequest) -> None:
                 status_code=422,
                 detail="workflowId is required when jobType=WORKFLOW_VALIDATION",
             )
+        if req.validationMode == WEIGHTS_PROTOCOL_V1:
+            if (
+                req.runtimeProfileId is None
+                or req.trustedModelDefinition is None
+                or req.globalWeights is None
+            ):
+                raise HTTPException(
+                    status_code=422,
+                    detail="runtimeProfileId, trustedModelDefinition and globalWeights are required for weights protocol v1",
+                )
         return
 
     if req.jobType == STANDALONE_VALIDATION:
@@ -38,19 +49,16 @@ def validate_create_job_request(req: CreateJobRequest) -> None:
 @router.post("/internal/jobs", response_model=CreateJobResponse)
 async def create_job(http_request: Request, payload: CreateJobRequest = Body(...)):
     raw_body_bytes = await http_request.body()
-    raw_body = raw_body_bytes.decode("utf-8", errors="ignore")
     validate_create_job_request(payload)
 
     logger.info(
-        "create_job request received, path=%s, method=%s, headers=%s, contentType=%s, rawBodyLength=%s, rawBody=%s, parsedRequest=%s, jobType=%s, workflowId=%s, standaloneValidationId=%s, jobId=%s, modelPath=%s, datasetPath=%s, callbackUrl=%s",
+        "create_job request received, path=%s, method=%s, contentType=%s, rawBodyLength=%s, jobType=%s, validationMode=%s, workflowId=%s, standaloneValidationId=%s, jobId=%s, modelPath=%s, datasetPath=%s, callbackUrl=%s",
         http_request.url.path,
         http_request.method,
-        dict(http_request.headers),
         http_request.headers.get("content-type"),
         len(raw_body_bytes),
-        raw_body,
-        payload.model_dump(),
         payload.jobType,
+        payload.validationMode,
         payload.workflowId,
         payload.standaloneValidationId,
         payload.jobId,
@@ -92,6 +100,10 @@ async def create_job(http_request: Request, payload: CreateJobRequest = Body(...
         "modelPath": payload.modelPath,
         "datasetPath": payload.datasetPath,
         "algorithmType": payload.algorithmType,
+        "validationMode": payload.validationMode,
+        "runtimeProfileId": payload.runtimeProfileId,
+        "trustedModelDefinition": payload.trustedModelDefinition,
+        "globalWeights": payload.globalWeights.model_dump() if payload.globalWeights else None,
     }
     save_jobs_to_disk(JOB_STORE)
 

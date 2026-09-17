@@ -3,6 +3,7 @@ package com.workflow.service.python;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.config.PythonIntegrationProperties;
+import com.workflow.config.SensitiveHttpLogSanitizer;
 import com.workflow.dto.python.PythonCreateJobRequest;
 import com.workflow.dto.python.PythonCreateJobResponse;
 import com.workflow.exception.BusinessException;
@@ -28,6 +29,7 @@ public class PythonJobClient {
     private final RestTemplate restTemplate;
     private final PythonIntegrationProperties properties;
     private final ObjectMapper objectMapper;
+    private final SensitiveHttpLogSanitizer logSanitizer;
 
     public PythonJobClient(@Qualifier("pythonJsonRestTemplate") RestTemplate restTemplate,
                            PythonIntegrationProperties properties,
@@ -35,6 +37,7 @@ public class PythonJobClient {
         this.restTemplate = restTemplate;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.logSanitizer = new SensitiveHttpLogSanitizer(objectMapper);
     }
 
     public PythonCreateJobResponse createJob(PythonCreateJobRequest request) {
@@ -45,8 +48,9 @@ public class PythonJobClient {
         HttpHeaders headers = buildJsonHeaders();
 
         log.info(
-                "Calling Python create job: jobType={}, workflowId={}, standaloneValidationId={}, jobId={}, url={}, contentType={}, accept={}, modelPath={}, datasetPath={}, callbackUrl={}, payloadBytes={}, requestBody={}",
+                "Calling Python create job: jobType={}, validationMode={}, workflowId={}, standaloneValidationId={}, jobId={}, url={}, contentType={}, accept={}, modelPath={}, datasetPath={}, callbackUrl={}, payloadBytes={}",
                 request.getJobType(),
+                request.getValidationMode(),
                 request.getWorkflowId(),
                 request.getStandaloneValidationId(),
                 request.getJobId(),
@@ -56,8 +60,7 @@ public class PythonJobClient {
                 request.getModelPath(),
                 request.getDatasetPath(),
                 request.getCallbackUrl(),
-                requestBody.getBytes(StandardCharsets.UTF_8).length,
-                requestBody
+                requestBody.getBytes(StandardCharsets.UTF_8).length
         );
 
         try {
@@ -71,7 +74,7 @@ public class PythonJobClient {
                     request.getWorkflowId(),
                     request.getStandaloneValidationId(),
                     response.getStatusCode(),
-                    writeLogBody(response.getBody())
+                    logSanitizer.sanitizeText(writeLogBody(response.getBody()))
             );
 
             PythonCreateJobResponse body = validateResponse(response);
@@ -94,8 +97,7 @@ public class PythonJobClient {
                     request.getStandaloneValidationId(),
                     request.getJobId(),
                     ex.getStatusCode(),
-                    responseBody,
-                    ex
+                    logSanitizer.sanitizeText(responseBody)
             );
             throw new BusinessException("PYTHON_CREATE_JOB_REQUEST_FAILED", summary, ex);
         } catch (BusinessException ex) {
@@ -103,12 +105,11 @@ public class PythonJobClient {
         } catch (Exception ex) {
             String summary = summarizeUnexpectedJobError(ex.getMessage());
             log.error(
-                    "Python create job invocation failed unexpectedly: jobType={}, workflowId={}, standaloneValidationId={}, summary={}",
+                    "Python create job invocation failed unexpectedly: jobType={}, workflowId={}, standaloneValidationId={}, exceptionType={}",
                     request.getJobType(),
                     request.getWorkflowId(),
                     request.getStandaloneValidationId(),
-                    summary,
-                    ex
+                    ex.getClass().getSimpleName()
             );
             throw new BusinessException("PYTHON_CREATE_JOB_REQUEST_FAILED", summary, ex);
         }
@@ -175,6 +176,16 @@ public class PythonJobClient {
         if (!StringUtils.hasText(request.getCallbackSecret())) {
             throw new BusinessException("PYTHON_CREATE_JOB_REQUEST_INVALID", "Python 创建任务失败：callbackSecret 不能为空");
         }
+        if ("WEIGHTS_PROTOCOL_V1".equals(request.getValidationMode())) {
+            if (!StringUtils.hasText(request.getRuntimeProfileId())
+                    || request.getTrustedModelDefinition() == null
+                    || request.getGlobalWeights() == null) {
+                throw new BusinessException(
+                        "PYTHON_CREATE_JOB_REQUEST_INVALID",
+                        "weights-only Validation 请求缺少可信模型定义或全局权重证据。"
+                );
+            }
+        }
     }
 
     private String resolveRemoteSummary(String responseBody) {
@@ -190,7 +201,10 @@ public class PythonJobClient {
                 return summarizeUnexpectedJobError(root.get("detail").toString());
             }
         } catch (Exception ex) {
-            log.warn("Failed to parse Python create job error body as JSON, responseBody={}", responseBody, ex);
+            log.warn(
+                    "Failed to parse Python create job error body as JSON, responseBytes={}",
+                    responseBody.getBytes(StandardCharsets.UTF_8).length
+            );
         }
         return summarizeUnexpectedJobError(responseBody);
     }

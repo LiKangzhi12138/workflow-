@@ -18,6 +18,7 @@ import com.workflow.dto.workflow.WorkflowListItemVO;
 import com.workflow.dto.workflow.WorkflowStepVO;
 import com.workflow.entity.DatasetAsset;
 import com.workflow.entity.ModelAsset;
+import com.workflow.entity.ModelDefinition;
 import com.workflow.entity.SysUser;
 import com.workflow.entity.Workflow;
 import com.workflow.entity.WorkflowModelUpload;
@@ -80,6 +81,8 @@ public class WorkflowServiceImpl implements WorkflowService {
     private final ValidationImageCacheService validationImageCacheService;
     private final ValidationResultService validationResultService;
     private final ResultArtifactCleanupService resultArtifactCleanupService;
+    private final WorkflowModelDefinitionSelectionService workflowModelDefinitionSelectionService;
+    private final WorkflowWeightsValidationPreparationService weightsValidationPreparationService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -111,11 +114,8 @@ public class WorkflowServiceImpl implements WorkflowService {
             throw new RuntimeException("客户端模型数量必须大于等于 1");
         }
 
-        // 校验 yoloVersion 只能是当前支持的 YOLO 主流程版本。
-        List<String> allowedVersions = Arrays.asList("YOLOv8", "YOLOv10", "YOLOv11");
-        if (!allowedVersions.contains(request.getYoloVersion())) {
-            throw new RuntimeException("不支持的 YOLO 版本，请选择 YOLOv8、YOLOv10 或 YOLOv11");
-        }
+        WorkflowModelDefinitionSelectionService.WorkflowModelSelection modelSelection =
+                workflowModelDefinitionSelectionService.resolve(request);
 
         Workflow workflow = new Workflow();
         workflow.setWorkflowCode(generateWorkflowCode());
@@ -123,10 +123,11 @@ public class WorkflowServiceImpl implements WorkflowService {
         workflow.setInitiatorUserId(currentUser.getId());
         workflow.setServerUserId(serverUser.getId());
         workflow.setClientModelAssetId(clientModel.getId());
+        workflow.setModelDefinitionId(modelSelection.modelDefinitionId());
         workflow.setServerDatasetAssetId(null);
         workflow.setClientModelCount(clientModelCount);
         workflow.setExpectedModelCount(clientModelCount);
-        workflow.setYoloVersion(request.getYoloVersion());
+        workflow.setYoloVersion(modelSelection.yoloVersion());
         workflow.setCollectedModelCount(0);
         workflow.setFederatedStatus(WorkflowFederatedAggregationService.FEDERATED_STATUS_PENDING);
         workflow.setFederatedStrategy(WorkflowFederatedAggregationService.FEDERATED_STRATEGY_FEDML);
@@ -213,6 +214,7 @@ public class WorkflowServiceImpl implements WorkflowService {
 
         Map<Long, String> usernameMap = buildUsernameMap(entityPage.getRecords());
         Map<Long, ModelAsset> modelMap = buildModelMap(entityPage.getRecords());
+        Map<Long, ModelDefinition> definitionMap = buildModelDefinitionMap(entityPage.getRecords());
         Map<Long, DatasetAsset> datasetMap = buildDatasetMap(entityPage.getRecords());
         Map<Long, WorkflowModelUploadSummaryService.WorkflowUploadSummary> uploadSummaryMap =
                 buildUploadSummaryMap(entityPage.getRecords());
@@ -233,6 +235,7 @@ public class WorkflowServiceImpl implements WorkflowService {
                 vo.setClientModelAssetName(modelAsset.getAssetName());
                 vo.setClientModelVersion(modelAsset.getModelVersion());
             }
+            applyModelDefinition(vo, item, findModelDefinition(definitionMap, item.getModelDefinitionId()));
             vo.setClientModelCount(item.getClientModelCount());
             vo.setExpectedModelCount(item.getExpectedModelCount());
             vo.setYoloVersion(item.getYoloVersion());
@@ -323,6 +326,7 @@ public class WorkflowServiceImpl implements WorkflowService {
 
         Map<Long, String> usernameMap = buildUsernameMap(Collections.singletonList(workflow));
         Map<Long, ModelAsset> modelMap = buildModelMap(Collections.singletonList(workflow));
+        Map<Long, ModelDefinition> definitionMap = buildModelDefinitionMap(Collections.singletonList(workflow));
         Map<Long, DatasetAsset> datasetMap = buildDatasetMap(Collections.singletonList(workflow));
 
         List<WorkflowStep> stepList = workflowStepMapper.selectList(
@@ -363,6 +367,11 @@ public class WorkflowServiceImpl implements WorkflowService {
             detailVO.setClientModelAssetName(modelAsset.getAssetName());
             detailVO.setClientModelVersion(modelAsset.getModelVersion());
         }
+        applyModelDefinition(
+                detailVO,
+                workflow,
+                findModelDefinition(definitionMap, workflow.getModelDefinitionId())
+        );
         detailVO.setClientModelCount(workflow.getClientModelCount());
         detailVO.setExpectedModelCount(workflow.getExpectedModelCount());
         detailVO.setYoloVersion(workflow.getYoloVersion());
@@ -581,10 +590,20 @@ public class WorkflowServiceImpl implements WorkflowService {
             throw new RuntimeException("请先绑定服务端数据集，再启动验证任务。");
         }
 
-        String modelFilePath = resolveActualModelPathUsedByValidation(workflow);
+        WorkflowWeightsValidationPreparationService.PreparedValidation weightsValidation = null;
+        String validationMode = WorkflowWeightsValidationPreparationService.VALIDATION_MODE_LEGACY;
+        String modelFilePath;
+        if (weightsValidationPreparationService.isV1Workflow(workflow)) {
+            weightsValidation = weightsValidationPreparationService.prepare(workflow);
+            validationMode = WorkflowWeightsValidationPreparationService.VALIDATION_MODE_V1;
+            modelFilePath = weightsValidation.modelPath();
+        } else {
+            modelFilePath = resolveActualModelPathUsedByValidation(workflow);
+        }
         log.info(
-                "startPythonJob resolved validation model path: workflowId={}, actualModelPathUsedByValidation={}",
+                "startPythonJob resolved validation input: workflowId={}, validationMode={}, actualModelPathUsedByValidation={}",
                 workflow.getId(),
+                validationMode,
                 modelFilePath
         );
 
@@ -616,8 +635,9 @@ public class WorkflowServiceImpl implements WorkflowService {
                 currentUser.getId()
         );
         log.info(
-                "Starting workflow validation with FEDERATED_OUTPUT model: workflowId={}, actualModelPathUsedByValidation={}, datasetPath={}, roleCode={}, userId={}, cacheDir={}, deletedImageCount={}",
+                "Starting workflow validation: workflowId={}, validationMode={}, actualModelPathUsedByValidation={}, datasetPath={}, roleCode={}, userId={}, cacheDir={}, deletedImageCount={}",
                 workflow.getId(),
+                validationMode,
                 modelFilePath,
                 datasetAsset.getFilePath(),
                 currentUser.getRoleCode(),
@@ -638,6 +658,12 @@ public class WorkflowServiceImpl implements WorkflowService {
         );
         request.setCallbackUrl(pythonIntegrationProperties.getJavaBaseUrl() + "/api/internal/python/jobs/callback");
         request.setCallbackSecret(pythonIntegrationProperties.getCallbackSecret());
+        request.setValidationMode(validationMode);
+        if (weightsValidation != null) {
+            request.setRuntimeProfileId(weightsValidation.runtimeProfileId());
+            request.setTrustedModelDefinition(weightsValidation.trustedModelDefinition());
+            request.setGlobalWeights(weightsValidation.globalWeights());
+        }
 
         PythonCreateJobResponse response = pythonJobClient.createJob(request);
 
@@ -1183,6 +1209,65 @@ public class WorkflowServiceImpl implements WorkflowService {
         );
 
         return modelAssets.stream().collect(Collectors.toMap(ModelAsset::getId, item -> item));
+    }
+
+    private Map<Long, ModelDefinition> buildModelDefinitionMap(List<Workflow> workflowList) {
+        Set<Long> definitionIds = workflowList.stream()
+                .map(Workflow::getModelDefinitionId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
+        if (definitionIds.isEmpty()) {
+            return Collections.emptyMap();
+        }
+
+        Map<Long, ModelDefinition> definitions =
+                workflowModelDefinitionSelectionService.findDefinitionsByIds(definitionIds);
+        Map<Long, ModelDefinition> safeDefinitions = definitions == null ? Collections.emptyMap() : definitions;
+        definitionIds.stream()
+                .filter(definitionId -> !safeDefinitions.containsKey(definitionId))
+                .forEach(definitionId -> log.warn(
+                        "Workflow references a missing ModelDefinition; falling back to legacy model metadata: definitionId={}",
+                        definitionId
+                ));
+        return safeDefinitions;
+    }
+
+    private ModelDefinition findModelDefinition(
+            Map<Long, ModelDefinition> definitionMap,
+            Long modelDefinitionId
+    ) {
+        if (modelDefinitionId == null || definitionMap == null || definitionMap.isEmpty()) {
+            return null;
+        }
+        return definitionMap.get(modelDefinitionId);
+    }
+
+    private void applyModelDefinition(
+            WorkflowListItemVO vo,
+            Workflow workflow,
+            ModelDefinition definition
+    ) {
+        vo.setModelDefinitionId(workflow.getModelDefinitionId());
+        if (definition != null) {
+            vo.setModelDefinitionCode(definition.getCode());
+            vo.setModelDefinitionDisplayName(definition.getDisplayName());
+            vo.setModelDefinitionFamily(definition.getModelFamily());
+            vo.setModelDefinitionVersion(definition.getModelVersion());
+        }
+    }
+
+    private void applyModelDefinition(
+            WorkflowDetailVO vo,
+            Workflow workflow,
+            ModelDefinition definition
+    ) {
+        vo.setModelDefinitionId(workflow.getModelDefinitionId());
+        if (definition != null) {
+            vo.setModelDefinitionCode(definition.getCode());
+            vo.setModelDefinitionDisplayName(definition.getDisplayName());
+            vo.setModelDefinitionFamily(definition.getModelFamily());
+            vo.setModelDefinitionVersion(definition.getModelVersion());
+        }
     }
 
     private Map<Long, DatasetAsset> buildDatasetMap(List<Workflow> workflowList) {

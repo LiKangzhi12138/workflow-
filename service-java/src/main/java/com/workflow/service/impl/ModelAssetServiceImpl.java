@@ -8,6 +8,7 @@ import com.workflow.dto.model.ModelAssetListItemVO;
 import com.workflow.dto.model.UpdateModelAssetRequest;
 import com.workflow.dto.model.UploadModelAssetRequest;
 import com.workflow.entity.ModelAsset;
+import com.workflow.entity.ModelDefinition;
 import com.workflow.entity.SysUser;
 import com.workflow.entity.Workflow;
 import com.workflow.entity.WorkflowModelUpload;
@@ -242,6 +243,57 @@ public class ModelAssetServiceImpl implements ModelAssetService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public Long registerWeightsProtocolV1Asset(
+            Workflow workflow,
+            WorkflowModelUpload upload,
+            ModelDefinition definition,
+            Path weightsFilePath,
+            String validationSummary
+    ) {
+        if (workflow == null || upload == null || definition == null) {
+            throw new IllegalArgumentException("workflow, upload and definition must not be null");
+        }
+        if (weightsFilePath == null || !Files.isRegularFile(weightsFilePath)) {
+            throw new BusinessException("MODEL_ASSET_FILE_MISSING", "校验后的模型权重文件不存在。");
+        }
+        try {
+            ModelAsset asset = new ModelAsset();
+            asset.setAssetCode(generateAssetCode());
+            asset.setAssetName(definition.getDisplayName() + " - workflow weights " + upload.getId());
+            asset.setOwnerUserId(workflow.getServerUserId());
+            asset.setOwnerRoleCode(ROLE_SERVER);
+            asset.setModelType(definition.getModelFamily());
+            asset.setModelVersion(definition.getModelVersion());
+            asset.setTaskType(definition.getTaskType());
+            asset.setFileName(weightsFilePath.getFileName().toString());
+            asset.setFilePath(weightsFilePath.toAbsolutePath().normalize().toString());
+            asset.setSourcePath(null);
+            asset.setSourceType(AssetSourceCatalog.SOURCE_WORKFLOW_WEIGHTS_V1);
+            asset.setImportMode(AssetSourceCatalog.IMPORT_MODE_WEIGHTS_PROTOCOL_V1);
+            asset.setRecordMode(AssetSourceCatalog.RECORD_MODE_FORMAL_ASSET);
+            asset.setFileSize(Files.size(weightsFilePath));
+            asset.setFilePathValidated(1);
+            asset.setLastCheckAt(LocalDateTime.now());
+            asset.setLastCheckStatus(CHECK_STATUS_OK);
+            asset.setLastCheckMessage(validationSummary);
+            asset.setYoloVersion(definition.getModelVersion());
+            asset.setIsPublic(0);
+            asset.setStatus(STATUS_READY);
+            asset.setDescription(
+                    "Protocol v1 weights-only asset; workflowId=" + workflow.getId()
+                            + "; modelDefinitionId=" + definition.getId()
+                            + "; definitionCode=" + definition.getCode()
+            );
+            asset.setIsDeleted(0);
+            modelAssetMapper.insert(asset);
+            return asset.getId();
+        } catch (IOException ex) {
+            throw new BusinessException("WEIGHTS_UPLOAD_FAILED", "模型权重资产纳管失败。", ex);
+        }
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public Long registerFederatedServerModel(Workflow workflow, Path federatedModelPath, int sourceModelCount) {
         if (workflow == null) {
             throw new IllegalArgumentException("workflow must not be null");
@@ -287,6 +339,58 @@ public class ModelAssetServiceImpl implements ModelAssetService {
             return asset.getId();
         } catch (IOException ex) {
             throw new BusinessException("MODEL_ASSET_REGISTER_FAILED", "联邦聚合模型纳管为正式资产失败。", ex);
+        }
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public Long registerFederatedWeightsV1Asset(
+            Workflow workflow,
+            ModelDefinition definition,
+            Path weightsPath,
+            int sourceModelCount,
+            String outputSha256
+    ) {
+        if (workflow == null || definition == null) {
+            throw new IllegalArgumentException("workflow and definition must not be null");
+        }
+        if (weightsPath == null || !Files.isRegularFile(weightsPath)) {
+            throw new BusinessException("MODEL_ASSET_FILE_MISSING", "联邦全局权重文件不存在。");
+        }
+        try {
+            ModelAsset asset = new ModelAsset();
+            asset.setAssetCode(generateAssetCode());
+            asset.setAssetName(definition.getDisplayName() + " - federated weights");
+            asset.setOwnerUserId(workflow.getServerUserId());
+            asset.setOwnerRoleCode(ROLE_SERVER);
+            asset.setModelType(definition.getModelFamily());
+            asset.setModelVersion(definition.getModelVersion());
+            asset.setTaskType(definition.getTaskType());
+            asset.setFileName(weightsPath.getFileName().toString());
+            asset.setFilePath(weightsPath.toAbsolutePath().normalize().toString());
+            asset.setSourcePath(null);
+            asset.setSourceType(AssetSourceCatalog.SOURCE_FEDERATED_WEIGHTS_V1);
+            asset.setImportMode(AssetSourceCatalog.IMPORT_MODE_WEIGHTS_PROTOCOL_V1);
+            asset.setRecordMode(AssetSourceCatalog.RECORD_MODE_FORMAL_ASSET);
+            asset.setFileSize(Files.size(weightsPath));
+            asset.setFilePathValidated(1);
+            asset.setLastCheckAt(LocalDateTime.now());
+            asset.setLastCheckStatus(CHECK_STATUS_OK);
+            asset.setLastCheckMessage("Protocol v1 global weights passed safe output inspection; sha256=" + outputSha256);
+            asset.setYoloVersion(definition.getModelVersion());
+            asset.setIsPublic(0);
+            asset.setStatus(STATUS_READY);
+            asset.setDescription(
+                    "Federated weights-only asset; workflowId=" + workflow.getId()
+                            + "; modelDefinitionId=" + definition.getId()
+                            + "; definitionCode=" + definition.getCode()
+                            + "; sourceModelCount=" + sourceModelCount
+            );
+            asset.setIsDeleted(0);
+            modelAssetMapper.insert(asset);
+            return asset.getId();
+        } catch (IOException ex) {
+            throw new BusinessException("WEIGHTS_FEDAVG_FAILED", "联邦全局权重资产纳管失败。", ex);
         }
     }
 

@@ -1,0 +1,16 @@
+fastapi==0.110.0
+uvicorn==0.27.1
+pydantic==2.6.4
+matplotlib==3.9.2
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+Pillow==10.4.0
+PyYAML==6.0.2
+requests==2.32.3
+scipy==1.14.1
+timm==0.6.11
+mmcv-full==1.6.2
+mmsegmentation==0.27.0
+addict==2.4.0
+prettytable==3.10.0
+yapf==0.40.2

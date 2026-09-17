@@ -7,6 +7,7 @@ import com.workflow.config.PythonIntegrationProperties;
 import com.workflow.config.WorkflowStorageProperties;
 import com.workflow.dto.python.PythonCallbackRequest;
 import com.workflow.dto.python.PythonCallbackResultFile;
+import com.workflow.dto.python.PythonJobTypes;
 import com.workflow.entity.Workflow;
 import com.workflow.entity.WorkflowStep;
 import com.workflow.mapper.DatasetAssetMapper;
@@ -47,7 +48,7 @@ class WorkflowServiceImplCallbackTest {
     private static final Long WORKFLOW_ID = 7L;
     private static final String JOB_ID = "job-123";
     private static final String SECRET = "dev-secret";
-    private static final String KNOWN_COMPLETED_SIGNATURE = "13d73a726b9385504f2a5024471ee2b06c023a913035d63ec7f51a702e3b6ebb";
+    private static final String KNOWN_COMPLETED_SIGNATURE = "735c7d3f4758acca1a626853b4f0815bbb1a9b5794dafca49602e7e7a6feb765";
 
     @Mock
     private WorkflowMapper workflowMapper;
@@ -94,6 +95,11 @@ class WorkflowServiceImplCallbackTest {
     @Mock
     private ResultArtifactCleanupService resultArtifactCleanupService;
 
+    @Mock
+    private WorkflowModelDefinitionSelectionService workflowModelDefinitionSelectionService;
+    @Mock
+    private WorkflowWeightsValidationPreparationService weightsValidationPreparationService;
+
     private WorkflowServiceImpl workflowService;
 
     @BeforeEach
@@ -122,7 +128,9 @@ class WorkflowServiceImplCallbackTest {
                 workflowFederatedAggregationService,
                 validationImageCacheService,
                 validationResultService,
-                resultArtifactCleanupService
+                resultArtifactCleanupService,
+                workflowModelDefinitionSelectionService,
+                weightsValidationPreparationService
         );
 
         lenient().when(workflowStepMapper.selectCount(any())).thenReturn(0L);
@@ -277,6 +285,7 @@ class WorkflowServiceImplCallbackTest {
 
     private PythonCallbackRequest buildCompletedRequest() {
         PythonCallbackRequest request = new PythonCallbackRequest();
+        request.setJobType(PythonJobTypes.WORKFLOW_VALIDATION);
         request.setJobId(JOB_ID);
         request.setWorkflowId(WORKFLOW_ID);
         request.setStatus("COMPLETED");
@@ -300,6 +309,7 @@ class WorkflowServiceImplCallbackTest {
 
     private PythonCallbackRequest buildFailedRequest() {
         PythonCallbackRequest request = new PythonCallbackRequest();
+        request.setJobType(PythonJobTypes.WORKFLOW_VALIDATION);
         request.setJobId(JOB_ID);
         request.setWorkflowId(WORKFLOW_ID);
         request.setStatus("FAILED");
@@ -314,6 +324,7 @@ class WorkflowServiceImplCallbackTest {
 
     private PythonCallbackRequest buildPreparingRequest(int progress) {
         PythonCallbackRequest request = new PythonCallbackRequest();
+        request.setJobType(PythonJobTypes.WORKFLOW_VALIDATION);
         request.setJobId(JOB_ID);
         request.setWorkflowId(WORKFLOW_ID);
         request.setStatus("PREPARING");
@@ -328,6 +339,7 @@ class WorkflowServiceImplCallbackTest {
 
     private PythonCallbackRequest buildValidatingRequest() {
         PythonCallbackRequest request = new PythonCallbackRequest();
+        request.setJobType(PythonJobTypes.WORKFLOW_VALIDATION);
         request.setJobId(JOB_ID);
         request.setWorkflowId(WORKFLOW_ID);
         request.setStatus("VALIDATING");
@@ -345,6 +357,7 @@ class WorkflowServiceImplCallbackTest {
             Map<String, Object> payload = new LinkedHashMap<>();
             payload.put("errorMessage", request.getErrorMessage());
             payload.put("jobId", request.getJobId());
+            payload.put("jobType", request.getJobType());
             payload.put("message", request.getMessage());
             payload.put("metrics", request.getMetrics());
             payload.put("progress", request.getProgress());
@@ -356,6 +369,7 @@ class WorkflowServiceImplCallbackTest {
                 resultFile.put("filePath", request.getResultFile().getFilePath());
             }
             payload.put("resultFile", resultFile);
+            payload.put("standaloneValidationId", request.getStandaloneValidationId());
             payload.put("status", request.getStatus());
             payload.put("workflowId", request.getWorkflowId());
 

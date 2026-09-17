@@ -11,6 +11,7 @@ def save_result(
     job_type: str,
     metrics: Optional[Dict[str, Any]] = None,
     validation_result: Optional[Dict[str, Any]] = None,
+    validation_evidence: Optional[Dict[str, Any]] = None,
     workflow_id: Optional[int] = None,
     standalone_validation_id: Optional[int] = None,
 ):
@@ -52,6 +53,7 @@ def save_result(
             "yoloVersion": safe_validation_result.get("yolo_version"),
             "totalImages": safe_validation_result.get("total_images"),
         },
+        "validationEvidence": dict(validation_evidence or {}),
     }
 
     with file_path.open("w", encoding="utf-8") as file:

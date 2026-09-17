@@ -1,0 +1,81 @@
+{
+  "schemaVersion": "1.0",
+  "definitionVersion": "1.0",
+  "definitionId": "YOLOV8N_SHEEP_V1",
+  "code": "YOLOV8N_SHEEP_V1",
+  "displayName": "YOLOv8n 羊群检测",
+  "modelFamily": "YOLO",
+  "version": "YOLOv8",
+  "variant": "yolov8n",
+  "taskType": "DETECTION",
+  "framework": "Ultralytics",
+  "frameworkVersion": "8.4.41",
+  "definitionType": "ULTRALYTICS_DETECTION_MODEL",
+  "definitionPayload": {
+    "architecture": {
+      "nc": 1,
+      "depth_multiple": 0.33,
+      "width_multiple": 0.25,
+      "backbone": [
+        [-1, 1, "Conv", [64, 3, 2]],
+        [-1, 1, "Conv", [128, 3, 2]],
+        [-1, 3, "C2f", [128, true]],
+        [-1, 1, "Conv", [256, 3, 2]],
+        [-1, 6, "C2f", [256, true]],
+        [-1, 1, "Conv", [512, 3, 2]],
+        [-1, 6, "C2f", [512, true]],
+        [-1, 1, "Conv", [1024, 3, 2]],
+        [-1, 3, "C2f", [1024, true]],
+        [-1, 1, "SPPF", [1024, 5]]
+      ],
+      "head": [
+        [-1, 1, "nn.Upsample", ["None", 2, "nearest"]],
+        [[-1, 6], 1, "Concat", [1]],
+        [-1, 3, "C2f", [512]],
+        [-1, 1, "nn.Upsample", ["None", 2, "nearest"]],
+        [[-1, 4], 1, "Concat", [1]],
+        [-1, 3, "C2f", [256]],
+        [-1, 1, "Conv", [256, 3, 2]],
+        [[-1, 12], 1, "Concat", [1]],
+        [-1, 3, "C2f", [512]],
+        [-1, 1, "Conv", [512, 3, 2]],
+        [[-1, 9], 1, "Concat", [1]],
+        [-1, 3, "C2f", [1024]],
+        [[15, 18, 21], 1, "Detect", ["nc"]]
+      ],
+      "ch": 3,
+      "channels": 3
+    },
+    "inputChannels": 3,
+    "names": {
+      "0": "sheep"
+    },
+    "stride": [8, 16, 32],
+    "imgsz": 640,
+    "parameterSemantics": "EMA_SNAPSHOT",
+    "preprocessing": {
+      "implementation": "Ultralytics",
+      "resize": "LetterBox",
+      "colorConversion": "OpenCV BGR to RGB",
+      "layout": "BHWC to BCHW",
+      "normalization": "divide by 255 to [0,1]"
+    },
+    "trustedSource": {
+      "type": "EXPERIMENT_VERIFIED_HANDOFF",
+      "phase1": "PASS",
+      "phase2": "PASS"
+    }
+  },
+  "classCount": 1,
+  "classOrder": ["sheep"],
+  "ignoreIndex": null,
+  "inputSpec": {
+    "channels": 3,
+    "imageSize": 640,
+    "layout": "BCHW"
+  },
+  "runtimeProfileId": "YOLO_RUNTIME_V1",
+  "architectureSignature": "2510fa3d9b145fe4cc5072bca168770b7989c291729a967fb9b75717cd9db74a",
+  "definitionSha256": "302bbb5e00b03c3a14eabf316be8cdc5bbbd5e0de235c28a7a6cb0b491a22cd2",
+  "status": "ENABLED"
+}

@@ -3,6 +3,7 @@ package com.workflow.service.python;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.config.PythonIntegrationProperties;
+import com.workflow.config.SensitiveHttpLogSanitizer;
 import com.workflow.dto.python.PythonFederatedAggregateRequest;
 import com.workflow.dto.python.PythonFederatedAggregateResponse;
 import com.workflow.exception.BusinessException;
@@ -29,6 +30,7 @@ public class PythonFederatedClient {
     private final RestTemplate restTemplate;
     private final PythonIntegrationProperties properties;
     private final ObjectMapper objectMapper;
+    private final SensitiveHttpLogSanitizer logSanitizer;
 
     public PythonFederatedClient(@Qualifier("pythonJsonRestTemplate") RestTemplate restTemplate,
                                  PythonIntegrationProperties properties,
@@ -36,6 +38,7 @@ public class PythonFederatedClient {
         this.restTemplate = restTemplate;
         this.properties = properties;
         this.objectMapper = objectMapper;
+        this.logSanitizer = new SensitiveHttpLogSanitizer(objectMapper);
     }
 
     public PythonFederatedAggregateResponse aggregate(PythonFederatedAggregateRequest request) {
@@ -54,7 +57,7 @@ public class PythonFederatedClient {
                 headers.getContentType(),
                 headers.getAccept(),
                 requestBody.getBytes(StandardCharsets.UTF_8).length,
-                requestBody
+                logSanitizer.sanitizeText(requestBody)
         );
 
         try {
@@ -66,7 +69,7 @@ public class PythonFederatedClient {
                     "Python federated aggregate response received: workflowId={}, statusCode={}, responseBody={}",
                     request.getWorkflowId(),
                     response.getStatusCode(),
-                    writeLogBody(response.getBody())
+                    logSanitizer.sanitizeText(writeLogBody(response.getBody()))
             );
 
             return validateResponse(request, response);
@@ -79,8 +82,7 @@ public class PythonFederatedClient {
                     request.getStrategy(),
                     ex.getStatusCode(),
                     ex.getResponseHeaders() == null ? null : ex.getResponseHeaders().getContentType(),
-                    responseBody,
-                    ex
+                    logSanitizer.sanitizeText(responseBody)
             );
             throw new BusinessException("PYTHON_FEDERATED_REQUEST_FAILED", summary, ex);
         } catch (BusinessException ex) {
@@ -88,11 +90,10 @@ public class PythonFederatedClient {
         } catch (Exception ex) {
             String summary = WorkflowErrorSummarySupport.summarizeFederatedAggregation(ex);
             log.error(
-                    "Python federated aggregate invocation failed unexpectedly: workflowId={}, strategy={}, summary={}",
+                    "Python federated aggregate invocation failed unexpectedly: workflowId={}, strategy={}, exceptionType={}",
                     request.getWorkflowId(),
                     request.getStrategy(),
-                    summary,
-                    ex
+                    ex.getClass().getSimpleName()
             );
             throw new BusinessException("PYTHON_FEDERATED_REQUEST_FAILED", summary, ex);
         }
@@ -129,7 +130,7 @@ public class PythonFederatedClient {
                     request.getWorkflowId(),
                     request.getStrategy(),
                     summary,
-                    resolveResponseDetail(body)
+                    logSanitizer.sanitizeText(resolveResponseDetail(body))
             );
             throw new BusinessException("PYTHON_FEDERATED_FAILED", summary);
         }
@@ -176,7 +177,10 @@ public class PythonFederatedClient {
                     objectMapper.treeToValue(root, PythonFederatedAggregateResponse.class);
             return resolveResponseSummary(parsed);
         } catch (Exception ex) {
-            log.warn("Failed to parse Python federated aggregate error body as JSON, responseBody={}", responseBody, ex);
+            log.warn(
+                    "Failed to parse Python federated aggregate error body as JSON, responseBytes={}",
+                    responseBody.getBytes(StandardCharsets.UTF_8).length
+            );
             return WorkflowErrorSummarySupport.summarizeFederatedAggregation(responseBody);
         }
     }

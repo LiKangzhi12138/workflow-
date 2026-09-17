@@ -30,6 +30,7 @@ export const WORKFLOW_CURRENT_STEP_TEXT = {
   secureShuffleProcessing: '安全洗牌处理中',
   dpProcessing: '差分隐私处理中',
   secureAggregationProcessing: '安全聚合处理中',
+  weightsInspectedWaitingFederated: '\u6743\u91cd\u68c0\u67e5\u5b8c\u6210\uff0c\u7b49\u5f85\u8054\u90a6\u805a\u5408',
   federatedAggregating: '\u8054\u90a6\u5b66\u4e60\u805a\u5408\u4e2d',
   federatedCompleted: '\u8054\u90a6\u5b66\u4e60\u5b8c\u6210',
   federatedFailed: '\u8054\u90a6\u5b66\u4e60\u5931\u8d25',
@@ -157,6 +158,11 @@ export const CLIENT_VISUAL_STAGES = [
     description: '服务端正在执行安全聚合协议原型链路，完成聚合准备、聚合执行和结果生成控制。'
   },
   {
+    key: 'waiting-federated',
+    title: '\u6743\u91cd\u68c0\u67e5\u5b8c\u6210\uff0c\u7b49\u5f85\u8054\u90a6\u805a\u5408',
+    description: '\u5df2\u7eb3\u7ba1\u7684 weights-only \u6743\u91cd\u5df2\u901a\u8fc7\u68c0\u67e5\uff0c\u5c1a\u672a\u542f\u52a8\u8054\u90a6\u805a\u5408\u3002'
+  },
+  {
     key: 'federated',
     title: '\u8054\u90a6\u5b66\u4e60\u805a\u5408\u4e2d',
     description: '服务端已收齐模型，正在基于 FEDML 对多个解密后模型执行联邦聚合。'
@@ -205,6 +211,11 @@ export const SERVER_VISUAL_STAGES = [
     description: '服务端正在执行安全聚合协议处理链路。'
   },
   {
+    key: 'waiting-federated',
+    title: '\u6743\u91cd\u68c0\u67e5\u5b8c\u6210\uff0c\u7b49\u5f85\u8054\u90a6\u805a\u5408',
+    description: '\u5df2\u7eb3\u7ba1\u7684 weights-only \u6743\u91cd\u5df2\u901a\u8fc7\u68c0\u67e5\uff0c\u5c1a\u672a\u542f\u52a8\u8054\u90a6\u805a\u5408\u3002'
+  },
+  {
     key: 'federated',
     title: '\u8054\u90a6\u5b66\u4e60\u805a\u5408\u4e2d',
     description: '服务端已收齐并纳管模型，正在基于 FEDML 生成全局模型。'
@@ -235,6 +246,7 @@ export type ServerProcessPhaseKey =
   | 'secure-shuffle'
   | 'dp'
   | 'secure-aggregation'
+  | 'waiting-federated'
   | 'federated'
   | 'ready'
   | 'dataset'
@@ -292,6 +304,9 @@ export function resolveServerProcessPhase(
   ) {
     return 'ready'
   }
+  if (includesStepText(currentStep, WORKFLOW_CURRENT_STEP_TEXT.weightsInspectedWaitingFederated)) {
+    return 'waiting-federated'
+  }
   if (
     detail?.federatedStatus === 'RUNNING' ||
     includesStepText(currentStep, WORKFLOW_CURRENT_STEP_TEXT.federatedAggregating) ||
@@ -341,6 +356,8 @@ export function computeServerProcessPercent(phase: ServerProcessPhaseKey) {
       return 88
     case 'secure-aggregation':
       return 90
+    case 'waiting-federated':
+      return 90
     case 'federated':
       return 92
     case 'ready':
@@ -360,7 +377,7 @@ export function isServerProcessDialogActive(phase: ServerProcessPhaseKey) {
 }
 
 export function isServerProcessDialogClosable(phase: ServerProcessPhaseKey) {
-  return ['ready', 'dataset', 'validation', 'completed', 'failed'].includes(phase)
+  return ['waiting-federated', 'ready', 'dataset', 'validation', 'completed', 'failed'].includes(phase)
 }
 
 export function getServerProcessTitle(phase: ServerProcessPhaseKey) {
@@ -379,6 +396,8 @@ export function getServerProcessTitle(phase: ServerProcessPhaseKey) {
       return WORKFLOW_CURRENT_STEP_TEXT.dpProcessing
     case 'secure-aggregation':
       return WORKFLOW_CURRENT_STEP_TEXT.secureAggregationProcessing
+    case 'waiting-federated':
+      return WORKFLOW_CURRENT_STEP_TEXT.weightsInspectedWaitingFederated
     case 'federated':
       return WORKFLOW_CURRENT_STEP_TEXT.federatedAggregating
     case 'ready':
@@ -412,6 +431,8 @@ export function getServerProcessDescription(phase: ServerProcessPhaseKey) {
       return '服务端正在执行差分隐私处理阶段，记录隐私预算和裁剪噪声参数。'
     case 'secure-aggregation':
       return '服务端正在执行安全聚合协议处理链路，控制聚合准备、执行与结果生成。'
+    case 'waiting-federated':
+      return '\u6743\u91cd\u5df2\u901a\u8fc7\u5b89\u5168\u68c0\u67e5\u548c\u517c\u5bb9\u6027\u6821\u9a8c\uff0c\u5f53\u524d\u6b63\u7b49\u5f85\u670d\u52a1\u7aef\u542f\u52a8\u8054\u90a6\u805a\u5408\u3002'
     case 'federated':
       return '服务端正在基于已纳管的多个模型执行 FEDML 联邦聚合。'
     case 'ready':

@@ -479,8 +479,16 @@ public class WorkflowFederatedAggregationService {
                     "联邦全局模型已删除，无法再次启动工作流验证。"
             );
         }
+        boolean legacyFederatedOutput = AssetSourceCatalog.SOURCE_FEDERATED_OUTPUT.equalsIgnoreCase(asset.getSourceType());
+        boolean weightsFederatedOutput = workflow.getModelDefinitionId() != null
+                && WorkflowWeightsFederatedAggregationService.STRATEGY.equals(workflow.getFederatedStrategy())
+                && AssetSourceCatalog.SOURCE_FEDERATED_WEIGHTS_V1.equalsIgnoreCase(asset.getSourceType())
+                && AssetSourceCatalog.IMPORT_MODE_WEIGHTS_PROTOCOL_V1.equalsIgnoreCase(asset.getImportMode())
+                && AssetSourceCatalog.RECORD_MODE_FORMAL_ASSET.equalsIgnoreCase(asset.getRecordMode())
+                && "READY".equalsIgnoreCase(asset.getStatus())
+                && "OK".equalsIgnoreCase(asset.getLastCheckStatus());
         if (!Objects.equals(asset.getIsDeleted(), 0)
-                || !AssetSourceCatalog.SOURCE_FEDERATED_OUTPUT.equalsIgnoreCase(asset.getSourceType())) {
+                || (!legacyFederatedOutput && !weightsFederatedOutput)) {
             return FederatedModelAvailability.unavailable(
                     FEDERATED_MODEL_SOURCE_INVALID,
                     "工作流关联的模型不是联邦聚合全局模型，无法启动工作流验证。"

@@ -5,6 +5,7 @@ import com.workflow.dto.workflow.BindLocalModelRequest;
 import com.workflow.dto.workflow.ModelUploadInitRequest;
 import com.workflow.dto.workflow.ModelUploadInitResponse;
 import com.workflow.dto.workflow.WorkflowUploadProgressVO;
+import com.workflow.dto.workflow.WorkflowUploadContractVO;
 import com.workflow.security.LoginUserContext;
 import com.workflow.service.WorkflowModelUploadService;
 import jakarta.validation.Valid;
@@ -50,6 +51,8 @@ public class WorkflowModelUploadController {
             @PathVariable Long uploadId,
             @RequestParam String uploadToken,
             @RequestParam(required = false) String clientCryptoMode,
+            @RequestParam(required = false) String manifest,
+            @RequestParam(required = false) String descriptor,
             @RequestParam("file") MultipartFile file) {
         Long currentUserId = loginUserContext.getCurrentUser().getId();
         log.info(
@@ -60,8 +63,23 @@ public class WorkflowModelUploadController {
                 file != null ? file.getSize() : null,
                 clientCryptoMode
         );
-        uploadService.receiveEncryptedFile(uploadId, uploadToken, file, clientCryptoMode, currentUserId);
+        uploadService.receiveEncryptedFile(
+                uploadId,
+                uploadToken,
+                file,
+                manifest,
+                descriptor,
+                clientCryptoMode,
+                currentUserId
+        );
         return ApiResponse.success(null);
+    }
+
+    @GetMapping("/contract/{workflowId}")
+    @PreAuthorize("hasAuthority('CLIENT')")
+    public ApiResponse<WorkflowUploadContractVO> getUploadContract(@PathVariable Long workflowId) {
+        Long currentUserId = loginUserContext.getCurrentUser().getId();
+        return ApiResponse.success(uploadService.getUploadContract(workflowId, currentUserId));
     }
 
     @PostMapping("/{uploadId}/decrypt")

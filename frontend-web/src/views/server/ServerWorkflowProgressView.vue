@@ -72,6 +72,9 @@
                 <el-descriptions-item :label="WORKFLOW_PROGRESS_TEXT.currentStep">
                   {{ workflowDetail.currentStep || '-' }}
                 </el-descriptions-item>
+                <el-descriptions-item label="模型定义">
+                  {{ getWorkflowModelDisplayName(workflowDetail) }}
+                </el-descriptions-item>
                 <el-descriptions-item :label="WORKFLOW_PROGRESS_TEXT.currentProgress">
                   <el-progress :percentage="workflowDetail.progress || 0" />
                 </el-descriptions-item>
@@ -414,6 +417,7 @@ import {
 } from '@/api/workflow'
 import { listAllDatasetAssetsApi, type DatasetAssetItem } from '@/api/dataset'
 import { summarizeUiErrorMessage } from '@/utils/errorMessage'
+import { getWorkflowModelDisplayName } from '@/utils/workflowModelDisplay'
 import {
   computeServerProcessPercent,
   formatMechanismEnabled,
@@ -547,6 +551,8 @@ const canDeleteSavedWorkflowResult = computed(() => {
 
 const federatedStatusLabel = computed(() => {
   switch (workflowDetail.value?.federatedStatus) {
+    case 'STARTING':
+      return '权重检查完成，等待联邦聚合'
     case 'RUNNING':
       return '联邦学习聚合中'
     case 'COMPLETED':

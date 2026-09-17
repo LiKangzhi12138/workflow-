@@ -32,6 +32,11 @@
       <el-table v-loading="loading" :data="tableData" border>
         <el-table-column prop="workflowCode" label="工作流编码" min-width="180" show-overflow-tooltip />
         <el-table-column prop="workflowName" label="工作流名称" min-width="180" show-overflow-tooltip />
+        <el-table-column label="模型定义" min-width="190" show-overflow-tooltip>
+          <template #default="{ row }">
+            {{ getWorkflowModelDisplayName(row) }}
+          </template>
+        </el-table-column>
         <el-table-column prop="initiatorUsername" label="客户端用户" min-width="140" />
         <el-table-column prop="clientModelAssetName" label="绑定模型" min-width="180" show-overflow-tooltip />
         <el-table-column prop="serverDatasetAssetName" label="服务端数据集" min-width="180" show-overflow-tooltip />
@@ -100,6 +105,9 @@
             </el-descriptions-item>
             <el-descriptions-item label="模型版本">
               {{ detail.clientModelVersion || '-' }}
+            </el-descriptions-item>
+            <el-descriptions-item label="模型定义">
+              {{ getWorkflowModelDisplayName(detail) }}
             </el-descriptions-item>
             <el-descriptions-item label="服务端数据集">
               {{ detail.serverDatasetAssetName || '-' }}
@@ -217,6 +225,7 @@ import {
 } from '@/api/workflow'
 import { formatMechanismEnabled, getPrivacyStatusLabel } from '@/constants/workflowProgress'
 import { resolveValidPage } from '@/utils/pagination'
+import { getWorkflowModelDisplayName } from '@/utils/workflowModelDisplay'
 
 const router = useRouter()
 

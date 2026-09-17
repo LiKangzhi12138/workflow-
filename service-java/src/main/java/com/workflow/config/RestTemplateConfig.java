@@ -45,7 +45,9 @@ public class RestTemplateConfig {
 
         RestTemplate restTemplate = new RestTemplate(new BufferingClientHttpRequestFactory(requestFactory));
         restTemplate.setMessageConverters(buildPythonJsonConverters(objectMapper));
-        restTemplate.setInterceptors(List.of(new PythonJsonLoggingInterceptor()));
+        restTemplate.setInterceptors(List.of(
+                new PythonJsonLoggingInterceptor(new SensitiveHttpLogSanitizer(objectMapper))
+        ));
         return restTemplate;
     }
 
@@ -62,20 +64,25 @@ public class RestTemplateConfig {
         return converters;
     }
 
-    private static final class PythonJsonLoggingInterceptor implements ClientHttpRequestInterceptor {
+    static final class PythonJsonLoggingInterceptor implements ClientHttpRequestInterceptor {
+
+        private final SensitiveHttpLogSanitizer sanitizer;
+
+        PythonJsonLoggingInterceptor(SensitiveHttpLogSanitizer sanitizer) {
+            this.sanitizer = sanitizer;
+        }
 
         @Override
         public ClientHttpResponse intercept(org.springframework.http.HttpRequest request,
                                             byte[] body,
                                             ClientHttpRequestExecution execution) throws IOException {
-            String requestBody = body == null ? null : new String(body, StandardCharsets.UTF_8);
             log.info(
                     "pythonJsonRestTemplate outbound request: method={}, uri={}, headers={}, bodyBytes={}, body={}",
                     request.getMethod(),
-                    request.getURI(),
-                    request.getHeaders(),
+                    sanitizer.sanitizeUri(request.getURI()),
+                    sanitizer.sanitizeHeaders(request.getHeaders()),
                     body == null ? 0 : body.length,
-                    requestBody
+                    sanitizer.sanitizeBody(body, request.getURI(), true)
             );
 
             ClientHttpResponse response = execution.execute(request, body);
@@ -83,10 +90,10 @@ public class RestTemplateConfig {
             log.info(
                     "pythonJsonRestTemplate inbound response: method={}, uri={}, statusCode={}, headers={}, body={}",
                     request.getMethod(),
-                    request.getURI(),
+                    sanitizer.sanitizeUri(request.getURI()),
                     response.getStatusCode(),
-                    response.getHeaders(),
-                    responseBody
+                    sanitizer.sanitizeHeaders(response.getHeaders()),
+                    sanitizer.sanitizeText(responseBody)
             );
             return response;
         }

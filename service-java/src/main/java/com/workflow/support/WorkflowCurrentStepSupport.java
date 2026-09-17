@@ -19,6 +19,7 @@ public final class WorkflowCurrentStepSupport {
     public static final String DP_PROCESSING = "差分隐私处理中";
     public static final String SECURE_AGGREGATION_PROCESSING = "安全聚合处理中";
     public static final String FEDERATED_AGGREGATING = "\u8054\u90A6\u5B66\u4E60\u805A\u5408\u4E2D";
+    public static final String WEIGHTS_INSPECTED_WAITING_FEDERATED = "\u6743\u91CD\u68C0\u67E5\u5B8C\u6210\uFF0C\u7B49\u5F85\u8054\u90A6\u805A\u5408";
     public static final String FEDERATED_COMPLETED = "\u8054\u90A6\u5B66\u4E60\u5B8C\u6210";
     public static final String FEDERATED_FAILED = "\u8054\u90A6\u5B66\u4E60\u5931\u8D25";
     public static final String READY_TO_VALIDATE = "\u89E3\u5BC6\u5B8C\u6210\uFF0C\u53EF\u7EE7\u7EED\u9A8C\u8BC1";

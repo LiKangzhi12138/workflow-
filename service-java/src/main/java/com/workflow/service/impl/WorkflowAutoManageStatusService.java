@@ -1,6 +1,7 @@
 package com.workflow.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.workflow.config.WeightsProtocolProperties;
 import com.workflow.entity.Workflow;
 import com.workflow.entity.WorkflowModelUpload;
 import com.workflow.mapper.WorkflowMapper;
@@ -25,6 +26,7 @@ public class WorkflowAutoManageStatusService {
     private final WorkflowMapper workflowMapper;
     private final WorkflowModelUploadMapper workflowModelUploadMapper;
     private final WorkflowModelUploadSummaryService workflowModelUploadSummaryService;
+    private final WeightsProtocolProperties weightsProtocolProperties;
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public AutoManageStatusSnapshot refreshWorkflowAutoManageStatus(Long workflowId, String triggerSource) {
@@ -83,6 +85,10 @@ public class WorkflowAutoManageStatusService {
                 );
             } else if (WorkflowFederatedAggregationService.FEDERATED_STATUS_COMPLETED.equalsIgnoreCase(workflow.getFederatedStatus())) {
                 currentStep = WorkflowCurrentStepSupport.FEDERATED_COMPLETED;
+            } else if (WorkflowFederatedAggregationService.FEDERATED_STATUS_RUNNING.equalsIgnoreCase(workflow.getFederatedStatus())) {
+                currentStep = WorkflowCurrentStepSupport.FEDERATED_AGGREGATING;
+            } else if (isWeightsProtocolWorkflow(workflow)) {
+                currentStep = WorkflowCurrentStepSupport.WEIGHTS_INSPECTED_WAITING_FEDERATED;
             } else {
                 currentStep = WorkflowCurrentStepSupport.FEDERATED_AGGREGATING;
             }
@@ -178,6 +184,12 @@ public class WorkflowAutoManageStatusService {
 
     private boolean isDeleted(Integer value) {
         return value != null && value == 1;
+    }
+
+    private boolean isWeightsProtocolWorkflow(Workflow workflow) {
+        return weightsProtocolProperties.isEnabled()
+                && workflow != null
+                && workflow.getModelDefinitionId() != null;
     }
 
     @Getter

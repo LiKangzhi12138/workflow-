@@ -101,6 +101,28 @@ class WorkflowFederatedAggregationServiceAvailabilityTest {
     }
 
     @Test
+    void shouldReportAvailableForReadyFederatedWeightsV1File() throws Exception {
+        Workflow workflow = completedWorkflow(77L);
+        workflow.setModelDefinitionId(1L);
+        workflow.setFederatedStrategy(WorkflowWeightsFederatedAggregationService.STRATEGY);
+        Path weightsPath = federatedRoot.resolve("WF-37").resolve("weights-v1").resolve("asset-77").resolve("global_weights.pt");
+        Files.createDirectories(weightsPath.getParent());
+        Files.writeString(weightsPath, "global-weights");
+        ModelAsset asset = federatedAsset(77L, weightsPath, 0);
+        asset.setSourceType(AssetSourceCatalog.SOURCE_FEDERATED_WEIGHTS_V1);
+        asset.setImportMode(AssetSourceCatalog.IMPORT_MODE_WEIGHTS_PROTOCOL_V1);
+        asset.setRecordMode(AssetSourceCatalog.RECORD_MODE_FORMAL_ASSET);
+        asset.setStatus("READY");
+        asset.setLastCheckStatus("OK");
+        when(modelAssetMapper.selectById(77L)).thenReturn(asset);
+
+        var availability = service.resolveFederatedModelAvailability(workflow);
+
+        assertTrue(availability.available());
+        assertEquals(weightsPath.toAbsolutePath().normalize(), availability.modelPath());
+    }
+
+    @Test
     void shouldRejectWhenFederatedAggregationIsNotCompleted() {
         Workflow workflow = completedWorkflow(10L);
         workflow.setFederatedStatus("RUNNING");

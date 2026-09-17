@@ -1,5 +1,9 @@
 import http from './http'
 import { collectAllPageRecords } from './pagination'
+import {
+  normalizeWorkflowModelMetadata,
+  normalizeWorkflowModelMetadataList
+} from '@/utils/workflowModelDisplay'
 
 export type WorkflowStatus =
   | 'CREATED'
@@ -37,7 +41,8 @@ export interface CreateWorkflowRequest {
   serverUserId: number
   clientModelAssetId: number
   clientModelCount: number
-  yoloVersion: string
+  modelDefinitionId?: number
+  yoloVersion?: string
   isPublic?: number
   dpEnabled?: boolean
   dpEpsilon?: number
@@ -48,6 +53,16 @@ export interface CreateWorkflowRequest {
   secureAggregationEnabled?: boolean
   secureAggregationMode?: 'PLAIN' | 'SECURE'
   remark?: string
+}
+
+export type WorkflowUploadProtocol = 'LEGACY_CHECKPOINT' | 'WEIGHTS_V1'
+
+export interface WorkflowUploadContract {
+  workflowId: number
+  uploadProtocol: WorkflowUploadProtocol
+  manifestRequired: boolean
+  descriptorRequired: boolean
+  acceptedArtifactType: 'FULL_CHECKPOINT' | 'CLIENT_WEIGHTS'
 }
 
 export interface BindServerDatasetRequest {
@@ -66,6 +81,11 @@ export interface WorkflowListItem {
   clientModelAssetId?: number
   clientModelAssetName?: string
   clientModelVersion?: string
+  modelDefinitionId?: number | null
+  modelDefinitionCode?: string | null
+  modelDefinitionDisplayName?: string | null
+  modelDefinitionFamily?: string | null
+  modelDefinitionVersion?: string | null
   clientModelCount?: number
   expectedModelCount?: number
   yoloVersion?: string
@@ -145,6 +165,11 @@ export interface WorkflowDetail {
   clientModelAssetId?: number
   clientModelAssetName?: string
   clientModelVersion?: string
+  modelDefinitionId?: number | null
+  modelDefinitionCode?: string | null
+  modelDefinitionDisplayName?: string | null
+  modelDefinitionFamily?: string | null
+  modelDefinitionVersion?: string | null
   clientModelCount?: number
   expectedModelCount?: number
   yoloVersion?: string
@@ -222,7 +247,13 @@ export function listWorkflowsApi(params: WorkflowListQuery) {
   return http.get<ApiResponse<PageResult<WorkflowListItem>>, ApiResponse<PageResult<WorkflowListItem>>>(
     '/workflows',
     { params }
-  )
+  ).then((response) => ({
+    ...response,
+    data: {
+      ...response.data,
+      records: normalizeWorkflowModelMetadataList(response.data?.records)
+    }
+  }))
 }
 
 export function listAllWorkflowsApi(params: Pick<WorkflowListQuery, 'status'> = {}) {
@@ -233,7 +264,12 @@ export function listAllWorkflowsApi(params: Pick<WorkflowListQuery, 'status'> = 
 }
 
 export function getWorkflowDetailApi(id: number) {
-  return http.get<ApiResponse<WorkflowDetail>, ApiResponse<WorkflowDetail>>(`/workflows/${id}`)
+  return http
+    .get<ApiResponse<WorkflowDetail>, ApiResponse<WorkflowDetail>>(`/workflows/${id}`)
+    .then((response) => ({
+      ...response,
+      data: normalizeWorkflowModelMetadata(response.data)
+    }))
 }
 
 export function withdrawWorkflowApi(id: number) {
@@ -280,6 +316,7 @@ export interface ModelUploadInitResponse {
   aesIvBase64?: string
   uploadToken?: string
   tokenExpireAt?: string
+  uploadProtocol: WorkflowUploadProtocol
 }
 
 export interface UploadProgressVO {
@@ -330,6 +367,11 @@ export const initModelUpload = (data: ModelUploadInitRequest) =>
   http.post<ApiResponse<ModelUploadInitResponse>, ApiResponse<ModelUploadInitResponse>>(
     '/workflow-uploads/init',
     data
+  )
+
+export const getWorkflowUploadContract = (workflowId: number) =>
+  http.get<ApiResponse<WorkflowUploadContract>, ApiResponse<WorkflowUploadContract>>(
+    `/workflow-uploads/contract/${workflowId}`
   )
 
 /** 上传加密模型文件 */

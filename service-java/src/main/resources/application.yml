@@ -60,6 +60,7 @@ workflow:
     dataset-root-path: ${WORKFLOW_DATASET_ROOT:${workflow.storage.root-path}/datasets}
     validation-cache-root-path: ${WORKFLOW_VALIDATION_CACHE_ROOT:${workflow.storage.root-path}/validation-cache}
     federated-model-root-path: ${WORKFLOW_FEDERATED_MODEL_ROOT:${workflow.storage.root-path}/federated-models}
+    weights-asset-root-path: ${WORKFLOW_WEIGHTS_ASSET_ROOT:${workflow.storage.root-path}/weights-assets}
     server-path-import-enabled: ${WORKFLOW_SERVER_PATH_IMPORT_ENABLED:false}
     server-path-import-roots: ${WORKFLOW_SERVER_PATH_IMPORT_ROOTS:}
     server-path-mappings: ${WORKFLOW_SERVER_PATH_MAPPINGS:}
@@ -69,3 +70,12 @@ workflow:
     allowed-origin-patterns: ${APP_ALLOWED_ORIGIN_PATTERNS:}
   user-selection:
     excluded-server-email-domains: ${WORKFLOW_USER_SELECTION_EXCLUDED_SERVER_EMAIL_DOMAINS:example.com}
+  model-definition-registry:
+    enabled: ${MODEL_DEFINITION_REGISTRY_V1_ENABLED:false}
+    workflow-selectable-runtime-profiles: ${MODEL_DEFINITION_WORKFLOW_SELECTABLE_RUNTIME_PROFILES:YOLO_RUNTIME_V1,INTERNIMAGE_RUNTIME_V1}
+  weights-protocol-v1:
+    enabled: ${WEIGHTS_PROTOCOL_V1_ENABLED:false}
+  weights-fedavg-v1:
+    enabled: ${WEIGHTS_FEDAVG_V1_ENABLED:false}
+  weights-validation-v1:
+    enabled: ${WEIGHTS_VALIDATION_V1_ENABLED:false}

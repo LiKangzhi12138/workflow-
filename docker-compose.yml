@@ -62,6 +62,14 @@ services:
       dockerfile: service-python/Dockerfile
     env_file:
       - ${ENV_FILE_PATH:-.env}
+    environment:
+      YOLO_RUNTIME_BASE_URL: ${YOLO_RUNTIME_BASE_URL:-http://yolo-runtime:8010}
+      YOLO_RUNTIME_CONNECT_TIMEOUT_SECONDS: ${YOLO_RUNTIME_CONNECT_TIMEOUT_SECONDS:-2}
+      YOLO_RUNTIME_READ_TIMEOUT_SECONDS: ${YOLO_RUNTIME_READ_TIMEOUT_SECONDS:-10}
+      INTERNIMAGE_RUNTIME_V1_ENABLED: ${INTERNIMAGE_RUNTIME_V1_ENABLED:-false}
+      INTERNIMAGE_RUNTIME_BASE_URL: ${INTERNIMAGE_RUNTIME_BASE_URL:-http://internimage-runtime:8020}
+      INTERNIMAGE_RUNTIME_CONNECT_TIMEOUT_SECONDS: ${INTERNIMAGE_RUNTIME_CONNECT_TIMEOUT_SECONDS:-2}
+      INTERNIMAGE_RUNTIME_READ_TIMEOUT_SECONDS: ${INTERNIMAGE_RUNTIME_READ_TIMEOUT_SECONDS:-60}
     volumes:
       - ${HOST_STORAGE_ROOT}:${WORKFLOW_STORAGE_ROOT}
     logging:
@@ -76,6 +84,78 @@ services:
       timeout: 10s
       retries: 10
       start_period: 30s
+
+  yolo-runtime:
+    profiles:
+      - model-runtime
+    build:
+      context: .
+      dockerfile: service-yolo-runtime/Dockerfile
+      args:
+        PIP_INDEX_URL: ${YOLO_RUNTIME_PIP_INDEX_URL:-https://pypi.org/simple}
+    environment:
+      YOLO_RUNTIME_HOST: 0.0.0.0
+      YOLO_RUNTIME_PORT: 8010
+      YOLO_RUNTIME_PROFILE_ID: YOLO_RUNTIME_V1
+      WORKFLOW_STORAGE_ROOT: ${WORKFLOW_STORAGE_ROOT:-/opt/workflow-platform/storage}
+      YOLO_VALIDATION_CONFIDENCE_THRESHOLD: ${YOLO_CONFIDENCE_THRESHOLD:-0.25}
+      YOLO_VALIDATION_MAX_IMAGES: ${YOLO_MAX_IMAGES:-1000}
+    volumes:
+      - ${HOST_STORAGE_ROOT}:${WORKFLOW_STORAGE_ROOT}:ro
+    gpus: all
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import json,urllib.request;
+          d=json.load(urllib.request.urlopen('http://127.0.0.1:8010/internal/runtime/health',timeout=5));
+          raise SystemExit(0 if d.get('runtimeReady') is True else 1)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  internimage-runtime:
+    profiles:
+      - model-runtime
+    build:
+      context: .
+      dockerfile: service-internimage-runtime/Dockerfile
+      args:
+        PIP_INDEX_URL: ${INTERNIMAGE_RUNTIME_PIP_INDEX_URL:-https://pypi.org/simple}
+        TORCH_CUDA_ARCH_LIST: ${INTERNIMAGE_RUNTIME_CUDA_ARCH_LIST:-12.0}
+        MAX_JOBS: ${INTERNIMAGE_RUNTIME_MAX_JOBS:-4}
+    environment:
+      INTERNIMAGE_RUNTIME_HOST: 0.0.0.0
+      INTERNIMAGE_RUNTIME_PORT: 8020
+      INTERNIMAGE_RUNTIME_PROFILE_ID: INTERNIMAGE_RUNTIME_V1
+      WORKFLOW_STORAGE_ROOT: ${WORKFLOW_STORAGE_ROOT:-/opt/workflow-platform/storage}
+    volumes:
+      - ${HOST_STORAGE_ROOT}:${WORKFLOW_STORAGE_ROOT}:ro
+    gpus: all
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import json,urllib.request;
+          d=json.load(urllib.request.urlopen('http://127.0.0.1:8020/internal/runtime/health',timeout=10));
+          raise SystemExit(0 if d.get('runtimeReady') is True else 1)"
+      interval: 30s
+      timeout: 15s
+      retries: 5
+      start_period: 180s
 
   mysql:
     image: mysql:8.4

@@ -19,6 +19,11 @@ public class WorkflowListItemVO {
     private Long clientModelAssetId;
     private String clientModelAssetName;
     private String clientModelVersion;
+    private Long modelDefinitionId;
+    private String modelDefinitionCode;
+    private String modelDefinitionDisplayName;
+    private String modelDefinitionFamily;
+    private String modelDefinitionVersion;
     private Integer clientModelCount;
     private Integer expectedModelCount;
     private String yoloVersion;

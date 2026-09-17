@@ -6,6 +6,7 @@ import com.workflow.config.WorkflowStorageProperties;
 import com.workflow.dto.workflow.ModelUploadInitRequest;
 import com.workflow.dto.workflow.ModelUploadInitResponse;
 import com.workflow.dto.workflow.WorkflowUploadProgressVO;
+import com.workflow.dto.workflow.WorkflowUploadContractVO;
 import com.workflow.entity.ModelAsset;
 import com.workflow.entity.SysUser;
 import com.workflow.entity.Workflow;
@@ -29,6 +30,7 @@ import com.workflow.utils.AesEncryptionUtil;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.dao.DataAccessException;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -83,6 +85,12 @@ public class WorkflowModelUploadServiceImpl implements WorkflowModelUploadServic
     private final WorkflowAutoManageStatusService workflowAutoManageStatusService;
     private final WorkflowFederatedAggregationService workflowFederatedAggregationService;
 
+    @Autowired(required = false)
+    private WeightsProtocolUploadService weightsProtocolUploadService;
+
+    @Autowired(required = false)
+    private WorkflowWeightsFederatedAggregationService weightsFederatedAggregationService;
+
     @Override
     @Transactional(rollbackFor = Exception.class)
     public ModelUploadInitResponse initUpload(ModelUploadInitRequest request, Long currentUserId) {
@@ -111,6 +119,9 @@ public class WorkflowModelUploadServiceImpl implements WorkflowModelUploadServic
         String keyBase64 = AesEncryptionUtil.generateKeyBase64();
         String ivBase64 = AesEncryptionUtil.generateIvBase64();
         String uploadToken = UUID.randomUUID().toString().replace("-", "");
+        if (weightsProtocolUploadService != null) {
+            uploadToken = weightsProtocolUploadService.decorateToken(uploadToken, workflow);
+        }
         LocalDateTime tokenExpireAt = LocalDateTime.now().plusHours(TOKEN_EXPIRE_HOURS);
 
         WorkflowModelUpload upload = new WorkflowModelUpload();
@@ -172,6 +183,7 @@ public class WorkflowModelUploadServiceImpl implements WorkflowModelUploadServic
                 .aesIvBase64(ivBase64)
                 .uploadToken(uploadToken)
                 .tokenExpireAt(tokenExpireAt)
+                .uploadProtocol(resolveUploadProtocol(workflow))
                 .build();
     }
 
@@ -316,6 +328,8 @@ public class WorkflowModelUploadServiceImpl implements WorkflowModelUploadServic
     public void receiveEncryptedFile(Long uploadId,
                                      String uploadToken,
                                      MultipartFile file,
+                                     String manifestJson,
+                                     String descriptorJson,
                                      String clientCryptoMode,
                                      Long currentUserId) {
         WorkflowModelUpload record = requireUploadRecord(uploadId);
@@ -323,6 +337,15 @@ public class WorkflowModelUploadServiceImpl implements WorkflowModelUploadServic
         String workflowCode = resolveWorkflowCode(workflow);
         String originalFilename = resolveServerModelFilename(record);
         String effectiveClientCryptoMode = resolveClientCryptoMode(clientCryptoMode);
+        boolean weightsProtocolV1 = weightsProtocolUploadService != null
+                && weightsProtocolUploadService.isV1Token(record.getUploadToken());
+        if (weightsProtocolV1 != (weightsProtocolUploadService != null
+                && weightsProtocolUploadService.appliesTo(workflow))) {
+            throw new BusinessException(
+                    "WEIGHTS_PROTOCOL_DISABLED",
+                    "权重协议状态已变化，请重新初始化上传。"
+            );
+        }
 
         log.info(
                 "receiveEncryptedFile entered: workflowId={}, uploadId={}, workflowCode={}, originalFilename={}, multipartFilename={}, bytes={}, clientCryptoMode={}",
@@ -393,7 +416,9 @@ public class WorkflowModelUploadServiceImpl implements WorkflowModelUploadServic
                     .resolve("encrypted");
             Files.createDirectories(encryptedDir);
 
-            String storedFilename = uploadId + "_" + sanitizeFilename(record.getOriginalFilename()) + ".enc";
+            String storedFilename = weightsProtocolV1
+                    ? weightsProtocolUploadService.storedFilename(uploadId, sanitizeFilename(record.getOriginalFilename()))
+                    : uploadId + "_" + sanitizeFilename(record.getOriginalFilename()) + ".enc";
             Path encryptedFilePath = encryptedDir.resolve(storedFilename);
             byte[] storedBytes;
 
@@ -432,6 +457,10 @@ public class WorkflowModelUploadServiceImpl implements WorkflowModelUploadServic
             }
 
             Files.write(encryptedFilePath, storedBytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            if (weightsProtocolV1) {
+                weightsProtocolUploadService.persistMetadata(
+                        workflow.getId(), uploadId, manifestJson, descriptorJson);
+            }
 
             record.setStoredFilename(storedFilename);
             record.setEncryptedFilePath(encryptedFilePath.toString());
@@ -480,6 +509,9 @@ public class WorkflowModelUploadServiceImpl implements WorkflowModelUploadServic
                     storedBytes.length,
                     effectiveClientCryptoMode
             );
+        } catch (BusinessException e) {
+            updateRecordAsFailed(record, e.getMessage());
+            throw e;
         } catch (IOException e) {
             updateRecordAsFailed(record, WorkflowErrorSummarySupport.summarizeForUpload(
                     e,
@@ -495,6 +527,19 @@ public class WorkflowModelUploadServiceImpl implements WorkflowModelUploadServic
             );
             throw new BusinessException("UPLOAD_RECEIVE_FAILED", "上传文件保存失败，请稍后重试", e);
         }
+    }
+
+    @Override
+    public WorkflowUploadContractVO getUploadContract(Long workflowId, Long currentUserId) {
+        Workflow workflow = requireWorkflowForClientUpload(workflowId, currentUserId);
+        boolean v1 = weightsProtocolUploadService != null && weightsProtocolUploadService.appliesTo(workflow);
+        return WorkflowUploadContractVO.builder()
+                .workflowId(workflow.getId())
+                .uploadProtocol(v1 ? WeightsProtocolUploadService.PROTOCOL_V1 : WeightsProtocolUploadService.LEGACY_PROTOCOL)
+                .manifestRequired(v1)
+                .descriptorRequired(v1)
+                .acceptedArtifactType(v1 ? "CLIENT_WEIGHTS" : "FULL_CHECKPOINT")
+                .build();
     }
 
     @Override
@@ -657,6 +702,26 @@ public class WorkflowModelUploadServiceImpl implements WorkflowModelUploadServic
                             "SHA256 verification failed. Please upload the model again."
                     );
                 }
+            }
+
+            if (weightsProtocolUploadService != null && weightsProtocolUploadService.isV1Record(record)) {
+                weightsProtocolUploadService.processDecryptedUpload(workflow, record, decryptedBytes);
+                workflowAutoManageStatusService.refreshWorkflowAutoManageStatus(workflow.getId(), "weights-v1-success");
+                workflowStepService.appendWorkflowStep(
+                        workflow.getId(),
+                        "WEIGHTS_PROTOCOL_V1_ACCEPTED",
+                        "权重包安全检查",
+                        workflow.getStatus(),
+                        workflow.getStatus(),
+                        currentServerUserId,
+                        SERVER_ROLE,
+                        "weights-only 文件已通过安全检查和 ModelDefinition 兼容性检查。"
+                );
+                if (weightsFederatedAggregationService != null) {
+                    weightsFederatedAggregationService.triggerIfReady(
+                            workflow.getId(), currentServerUserId, "weights-v1-upload-success");
+                }
+                return;
             }
 
             log.info(
@@ -1205,6 +1270,12 @@ public class WorkflowModelUploadServiceImpl implements WorkflowModelUploadServic
             log.warn("Unknown clientCryptoMode received for workflow upload, fallback to WEB_CRYPTO: {}", clientCryptoMode);
         }
         return CLIENT_CRYPTO_MODE_WEB_CRYPTO;
+    }
+
+    private String resolveUploadProtocol(Workflow workflow) {
+        return weightsProtocolUploadService == null
+                ? WeightsProtocolUploadService.LEGACY_PROTOCOL
+                : weightsProtocolUploadService.protocolFor(workflow);
     }
 
     private String sanitizeFilename(String filename) {

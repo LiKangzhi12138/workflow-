@@ -74,6 +74,9 @@
                 <el-descriptions-item :label="WORKFLOW_PROGRESS_TEXT.currentStep">
                   {{ workflowDetail.currentStep || '-' }}
                 </el-descriptions-item>
+                <el-descriptions-item label="模型定义">
+                  {{ getWorkflowModelDisplayName(workflowDetail) }}
+                </el-descriptions-item>
                 <el-descriptions-item :label="WORKFLOW_PROGRESS_TEXT.currentProgress">
                   <el-progress :percentage="workflowDetail.progress || 0" />
                 </el-descriptions-item>
@@ -173,15 +176,26 @@
                   drag
                   multiple
                   :auto-upload="false"
-                  accept=".pt,.weights,.onnx"
+                  :accept="uploadContract.uploadProtocol === 'WEIGHTS_V1' ? '.pt' : '.pt,.weights,.onnx'"
                   :show-file-list="false"
                   :on-change="handleUploadFileChange"
                   :on-remove="handleUploadFileRemove"
                   class="upload-dropzone"
                 >
-                  <div class="upload-dropzone-title">点击或拖拽选择模型文件</div>
-                  <div class="upload-dropzone-desc">支持选择 .pt / .weights / .onnx 格式模型文件，可点击或拖拽上传</div>
+                  <div class="upload-dropzone-title">
+                    {{ uploadContract.uploadProtocol === 'WEIGHTS_V1' ? '选择 weights-only 文件' : '点击或拖拽选择模型文件' }}
+                  </div>
+                  <div class="upload-dropzone-desc">
+                    {{ uploadContract.uploadProtocol === 'WEIGHTS_V1'
+                      ? '仅接受 packaging tool 生成的 weights.pt'
+                      : '支持选择 .pt / .weights / .onnx 格式模型文件，可点击或拖拽上传' }}
+                  </div>
                 </el-upload>
+                <div v-if="uploadContract.uploadProtocol === 'WEIGHTS_V1'" class="upload-file-meta" style="margin-bottom: 16px">
+                  <div>仅接受 packaging tool 生成的 weights-only 文件；每次上传一个包。</div>
+                  <label>Manifest <input type="file" accept=".json,application/json" @change="handleManifestFileChange" /></label>
+                  <label>Descriptor <input type="file" accept=".json,application/json" @change="handleDescriptorFileChange" /></label>
+                </div>
 
                 <div class="upload-action-bar">
                   <div class="upload-file-meta">
@@ -454,10 +468,12 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import type { TagProps } from 'element-plus'
+import { getWorkflowModelDisplayName } from '@/utils/workflowModelDisplay'
 import {
   deleteSavedWorkflowResultApi,
   getWorkflowDetailApi,
   getWorkflowUploadProgress,
+  getWorkflowUploadContract,
   initModelUpload,
   listAllWorkflowsApi,
   saveWorkflowResultApi,
@@ -465,7 +481,8 @@ import {
   type UploadProgressVO,
   type WorkflowDetail,
   type WorkflowListItem,
-  type WorkflowStatus
+  type WorkflowStatus,
+  type WorkflowUploadContract
 } from '@/api/workflow'
 import {
   CLIENT_VISUAL_STAGES,
@@ -484,6 +501,11 @@ import {
   sortWorkflowsByLatest
 } from '@/constants/workflowProgress'
 import { summarizeUiErrorMessage } from '@/utils/errorMessage'
+import {
+  appendWeightsProtocolMetadata,
+  protocolUploadReady,
+  weightsUploadErrorMessage
+} from '@/utils/weightsPackageUpload'
 
 type PhaseState = 'done' | 'current' | 'pending' | 'error'
 type LocalUploadStatus = 'pending' | 'encrypting' | 'initializing' | 'uploading' | 'completed' | 'failed'
@@ -533,6 +555,16 @@ const uploadTransferProgress = ref(0)
 const uploadError = ref('')
 const fileSha256Preview = ref('')
 const uploadDialogVisible = ref(false)
+const uploadContract = ref<WorkflowUploadContract>({
+  workflowId: 0,
+  uploadProtocol: 'LEGACY_CHECKPOINT',
+  manifestRequired: false,
+  descriptorRequired: false,
+  acceptedArtifactType: 'FULL_CHECKPOINT'
+})
+const uploadContractLoaded = ref(false)
+const uploadManifestFile = ref<File | null>(null)
+const uploadDescriptorFile = ref<File | null>(null)
 let pollingTimer: number | null = null
 
 const routeWorkflowId = computed(() => {
@@ -611,6 +643,9 @@ const remainingUploadSlots = computed(() => {
   return Math.max(0, requiredModelCount.value - occupied)
 })
 const canStartClientUpload = computed(() => {
+  if (!uploadContractLoaded.value) {
+    return false
+  }
   if (!workflowDetail.value || !resolvedWorkflowId.value || selectedUploadFiles.value.length === 0) {
     return false
   }
@@ -618,6 +653,13 @@ const canStartClientUpload = computed(() => {
     return false
   }
   if (!resolvedClientModelAssetId.value) {
+    return false
+  }
+  if (!selectedUploadFiles.value.every((item) => protocolUploadReady(
+    uploadContract.value.uploadProtocol,
+    item.raw,
+    { manifest: uploadManifestFile.value, descriptor: uploadDescriptorFile.value }
+  ))) {
     return false
   }
   if (requiredModelCount.value <= 1) {
@@ -648,6 +690,7 @@ const serverProcessingPhases = ['accepted', 'downloading', 'decrypting', 'regist
 const uploadPanelSummaryTitle = computed(() => {
   if (uploadError.value) return '上传链路出现异常'
   if (federatedModelUnavailable.value) return '联邦聚合已完成，但全局模型当前不可用'
+  if (serverProcessPhase.value === 'waiting-federated') return getServerProcessTitle('waiting-federated')
   if (['ready', 'dataset', 'validation', 'completed'].includes(serverProcessPhase.value)) return '当前工作流已完成联邦聚合，可继续进入验证流程'
   if (serverProcessingPhases.includes(serverProcessPhase.value)) {
     return '服务端正在处理已上传模型'
@@ -658,6 +701,9 @@ const uploadPanelSummaryDescription = computed(() => {
   if (uploadError.value) return uploadError.value
   if (federatedModelUnavailable.value) {
     return workflowDetail.value?.federatedModelUnavailableReason || '联邦全局模型不可用，无法再次启动验证。'
+  }
+  if (serverProcessPhase.value === 'waiting-federated') {
+    return getServerProcessDescription('waiting-federated')
   }
   if ([...serverProcessingPhases, 'ready', 'dataset', 'validation', 'completed'].includes(serverProcessPhase.value)) {
     return getServerProcessDescription(serverProcessPhase.value)
@@ -681,6 +727,9 @@ const clientPhaseKey = computed(() => {
   }
   if (['ready', 'dataset', 'validation', 'completed'].includes(serverProcessPhase.value)) {
     return 'ready'
+  }
+  if (serverProcessPhase.value === 'waiting-federated') {
+    return 'waiting-federated'
   }
   if (['secure-shuffle', 'dp', 'secure-aggregation', 'federated'].includes(serverProcessPhase.value)) {
     return 'federated'
@@ -736,6 +785,9 @@ const clientPhasePercent = computed(() => {
   if (clientPhaseKey.value === 'federated') {
     return Math.max(85, computeServerProcessPercent(serverProcessPhase.value))
   }
+  if (clientPhaseKey.value === 'waiting-federated') {
+    return Math.max(85, computeServerProcessPercent(serverProcessPhase.value))
+  }
   if (clientPhaseKey.value === 'server-processing') {
     return Math.max(70, computeServerProcessPercent(serverProcessPhase.value))
   }
@@ -745,6 +797,7 @@ const clientPhasePercent = computed(() => {
 const clientSummaryType = computed(() => {
   if (workflowDetail.value?.status === 'FAILED' || workflowDetail.value?.federatedStatus === 'FAILED') return 'error'
   if (federatedModelUnavailable.value) return 'warning'
+  if (serverProcessPhase.value === 'waiting-federated') return 'info'
   if (['ready', 'dataset', 'validation', 'completed'].includes(serverProcessPhase.value)) return 'success'
   if (serverProcessingPhases.includes(serverProcessPhase.value)) return 'warning'
   return 'info'
@@ -753,6 +806,7 @@ const clientSummaryType = computed(() => {
 const clientSummaryTitle = computed(() => {
   if (workflowDetail.value?.status === 'FAILED' || workflowDetail.value?.federatedStatus === 'FAILED') return '当前流程出现异常'
   if (federatedModelUnavailable.value) return '联邦聚合已完成，但全局模型当前不可用'
+  if (serverProcessPhase.value === 'waiting-federated') return getServerProcessTitle('waiting-federated')
   if ([...serverProcessingPhases, 'ready', 'dataset', 'validation', 'completed'].includes(serverProcessPhase.value)) {
     return getServerProcessTitle(serverProcessPhase.value)
   }
@@ -768,6 +822,9 @@ const clientSummaryDescription = computed(() => {
   }
   if (federatedModelUnavailable.value) {
     return workflowDetail.value?.federatedModelUnavailableReason || '联邦全局模型不可用，无法再次启动验证。'
+  }
+  if (serverProcessPhase.value === 'waiting-federated') {
+    return getServerProcessDescription('waiting-federated')
   }
   if (uploadSubmitting.value && uploadUiStep.value > 0) {
     return uploadUiStageDescription.value
@@ -928,13 +985,21 @@ async function loadWorkflowList() {
 
 async function loadWorkflowDetail(targetWorkflowId: number) {
   detailLoading.value = true
+  uploadContractLoaded.value = false
   try {
-    const [detailRes, uploadRes] = await Promise.all([
+    const [detailRes, uploadRes, contractRes] = await Promise.all([
       getWorkflowDetailApi(targetWorkflowId),
-      getWorkflowUploadProgress(targetWorkflowId).catch(() => null)
+      getWorkflowUploadProgress(targetWorkflowId).catch(() => null),
+      getWorkflowUploadContract(targetWorkflowId).catch(() => null)
     ])
     workflowDetail.value = detailRes.data
     uploadProgress.value = uploadRes?.data ?? null
+    if (contractRes?.data) {
+      uploadContract.value = contractRes.data
+      uploadContractLoaded.value = true
+    } else {
+      uploadError.value = '无法读取当前工作流上传协议，上传功能已暂时停用。'
+    }
     console.info('[client-workflow-progress] workflow detail synced from backend', {
       workflowId: targetWorkflowId,
       workflowStatus: workflowDetail.value?.status,
@@ -1078,7 +1143,9 @@ function handleUploadFileChange(_uploadFileObj: any, uploadFiles: any[]) {
     return
   }
 
-  const limit = requiredModelCount.value <= 1 ? 1 : Math.max(0, remainingUploadSlots.value)
+  const limit = uploadContract.value.uploadProtocol === 'WEIGHTS_V1'
+    ? 1
+    : requiredModelCount.value <= 1 ? 1 : Math.max(0, remainingUploadSlots.value)
   const nextFiles = uploadFiles
     .map((item) => item?.raw as File | undefined)
     .filter((item): item is File => Boolean(item))
@@ -1377,6 +1444,10 @@ async function startWorkflowUpload() {
         )
         const formData = new FormData()
         formData.append('file', preparedPayload.uploadBlob, preparedPayload.uploadFilename)
+        await appendWeightsProtocolMetadata(formData, initData.uploadProtocol, {
+          manifest: uploadManifestFile.value,
+          descriptor: uploadDescriptorFile.value
+        })
         await uploadEncryptedModelFile(
           initData.uploadId,
           initData.uploadToken,
@@ -1398,7 +1469,10 @@ async function startWorkflowUpload() {
         })
       } catch (error) {
         failureCount += 1
-        uploadError.value = resolveUploadClientErrorMessage(currentStage, error)
+        const raw = error instanceof Error ? error.message : String(error || '')
+        uploadError.value = uploadContract.value.uploadProtocol === 'WEIGHTS_V1'
+          ? weightsUploadErrorMessage(raw)
+          : resolveUploadClientErrorMessage(currentStage, error)
         updateLocalUploadFileStatus(fileItem.uid, 'failed', '上传失败', uploadError.value)
         console.error('[client-workflow-progress] single file upload failed', {
           workflowId,
@@ -1534,6 +1608,14 @@ watch(
     startPollingIfNeeded()
   }
 )
+
+function handleManifestFileChange(event: Event) {
+  uploadManifestFile.value = (event.target as HTMLInputElement).files?.[0] || null
+}
+
+function handleDescriptorFileChange(event: Event) {
+  uploadDescriptorFile.value = (event.target as HTMLInputElement).files?.[0] || null
+}
 
 onMounted(() => {
   initializePage()

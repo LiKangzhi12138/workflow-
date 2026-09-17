@@ -13,6 +13,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -27,6 +28,9 @@ public class WorkflowAcceptAutoManageAsyncService {
     private final WorkflowModelUploadService workflowModelUploadService;
     private final WorkflowAutoManageStatusService workflowAutoManageStatusService;
     private final WorkflowFederatedAggregationService workflowFederatedAggregationService;
+
+    @Value("${workflow.weights-protocol-v1.enabled:false}")
+    private boolean weightsProtocolV1Enabled;
 
     @Async("workflowTaskExecutor")
     public void processAcceptedWorkflowAsync(Long workflowId,
@@ -100,7 +104,8 @@ public class WorkflowAcceptAutoManageAsyncService {
         WorkflowAutoManageStatusService.AutoManageStatusSnapshot snapshot =
                 workflowAutoManageStatusService.refreshWorkflowAutoManageStatus(workflowId, "accept-async-finalize");
         boolean federatedTriggered = false;
-        if (snapshot.getCompletedModelCount() >= snapshot.getRequiredModelCount()) {
+        if (!isWeightsProtocolWorkflow(workflow)
+                && snapshot.getCompletedModelCount() >= snapshot.getRequiredModelCount()) {
             try {
                 federatedTriggered = workflowFederatedAggregationService.triggerFederatedAggregationIfReady(
                         workflowId,
@@ -115,6 +120,9 @@ public class WorkflowAcceptAutoManageAsyncService {
                         ex
                 );
             }
+        } else if (isWeightsProtocolWorkflow(workflow)) {
+            Workflow latestWorkflow = workflowMapper.selectById(workflowId);
+            federatedTriggered = isCompletedWeightsAggregation(latestWorkflow);
         }
 
         log.info(
@@ -129,6 +137,17 @@ public class WorkflowAcceptAutoManageAsyncService {
                 federatedTriggered,
                 String.join(" | ", failureMessages)
         );
+    }
+
+    private boolean isWeightsProtocolWorkflow(Workflow workflow) {
+        return weightsProtocolV1Enabled && workflow != null && workflow.getModelDefinitionId() != null;
+    }
+
+    boolean isCompletedWeightsAggregation(Workflow workflow) {
+        return workflow != null
+                && WorkflowWeightsFederatedAggregationService.STRATEGY.equals(workflow.getFederatedStrategy())
+                && "COMPLETED".equals(workflow.getFederatedStatus())
+                && workflow.getFederatedModelAssetId() != null;
     }
 
     private List<WorkflowModelUpload> listPendingAutoManageUploads(Long workflowId) {

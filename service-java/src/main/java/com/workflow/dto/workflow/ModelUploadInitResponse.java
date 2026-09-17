@@ -22,4 +22,6 @@ public class ModelUploadInitResponse {
     private String uploadToken;
 
     private LocalDateTime tokenExpireAt;
+
+    private String uploadProtocol;
 }

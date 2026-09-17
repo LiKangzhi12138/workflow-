@@ -86,6 +86,11 @@ class WorkflowServiceImplAdvanceWorkflowTest {
     @Mock
     private ResultArtifactCleanupService resultArtifactCleanupService;
 
+    @Mock
+    private WorkflowModelDefinitionSelectionService workflowModelDefinitionSelectionService;
+    @Mock
+    private WorkflowWeightsValidationPreparationService weightsValidationPreparationService;
+
     private WorkflowServiceImpl workflowService;
 
     @BeforeEach
@@ -117,7 +122,9 @@ class WorkflowServiceImplAdvanceWorkflowTest {
                 workflowFederatedAggregationService,
                 validationImageCacheService,
                 validationResultService,
-                resultArtifactCleanupService
+                resultArtifactCleanupService,
+                workflowModelDefinitionSelectionService,
+                weightsValidationPreparationService
         );
 
         SysUser currentServerUser = new SysUser();

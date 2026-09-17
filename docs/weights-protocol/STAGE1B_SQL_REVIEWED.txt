@@ -1,0 +1,333 @@
+# 1. 最终结论
+
+PASS
+
+这是基于仓库当前初始化 SQL、迁移 SQL、Java Entity/Mapper 和 MySQL 8.4 Compose 配置完成的静态安全审计。未连接实时数据库，因此执行前仍应使用第 11 节的只读语句核对实际线上 schema 是否与仓库一致。
+
+STAGE1B_SQL.sql 可以在当前仓库描述的既有数据基础上安全手工执行。建议先备份，再按文件原顺序整体执行。
+
+# 2. 当前数据库兼容性
+
+1. 当前 docker-compose.yml 声明 mysql:8.4。
+2. model_definition 不与现有表名或 Java Entity 映射冲突。现有主表采用单数 snake_case，例如 workflow、model_asset、dataset_asset。
+3. id 为 BIGINT NOT NULL AUTO_INCREMENT，与 workflow、model_asset、dataset_asset、standalone_validation、sys_user 等主表一致；Java 使用 Long 和 IdType.AUTO。
+4. 表引擎 InnoDB、字符集 utf8mb4、排序规则 utf8mb4_0900_ai_ci，与当前主要业务表一致。
+5. MySQL 8.4 原生支持 JSON、JSON_ARRAY 和 CAST(... AS JSON)。definition_json 与 class_order_json 使用 JSON 类型合理。
+6. created_at、updated_at 使用 DATETIME、CURRENT_TIMESTAMP 和 ON UPDATE CURRENT_TIMESTAMP，与现有主表风格一致。
+7. Java ModelDefinition 的 Long、Integer、String、LocalDateTime 字段与 SQL BIGINT、INT、JSON/VARCHAR/CHAR、DATETIME 可映射；ModelDefinitionMapper 使用 BaseMapper<ModelDefinition>，表名为 model_definition。
+8. Java Workflow.modelDefinitionId 为 Long，与 workflow.model_definition_id BIGINT NULL 一致。
+9. 当前静态 SQL 没有发现 idx_workflow_model_definition_id 或同列现有索引，新增索引不与仓库 schema 重复。
+10. 执行时使用的数据库应保持 MySQL 默认字符串转义语义，即 @@sql_mode 不包含 NO_BACKSLASH_ESCAPES。当前 seed 使用双反斜杠保证 JSON 最终收到 Unicode 转义。
+
+VARCHAR 长度审核：
+
+- code VARCHAR(64)：足够，当前值 YOLOV8N_SHEEP_V1。
+- display_name VARCHAR(128)：足够，当前值 YOLOv8n 羊群检测。
+- model_family、model_version、variant、task_type、framework、framework_version、definition_type 均为 VARCHAR(64)：对当前值和合理后续扩展足够。
+- definition_version VARCHAR(32)：足够。
+- runtime_profile_id VARCHAR(64)：足够，当前值 YOLO_RUNTIME_V1。
+- status VARCHAR(32)：足够支持 ENABLED、DISABLED。
+- architecture_signature CHAR(64) 与 definition_sha256 CHAR(64)：适合固定长度 SHA-256 十六进制字符串。
+
+# 3. 危险 SQL 检查
+
+DROP：不存在。
+
+DELETE：不存在。
+
+TRUNCATE：不存在。
+
+UPDATE历史数据：不存在可执行 UPDATE。文件注释明确说明不回填历史 workflow。updated_at 的 ON UPDATE CURRENT_TIMESTAMP 只是新表时间字段属性，不是历史数据更新语句。
+
+NOT NULL破坏：不存在。没有修改任何旧列的 nullability；新增 workflow.model_definition_id 明确为 BIGINT NULL。model_definition 的 NOT NULL 只约束新表。
+
+DEFAULT假Definition：不存在。workflow.model_definition_id 没有 DEFAULT 1 或其他默认值，也没有历史数据回填。
+
+FOREIGN KEY：不存在。没有增加强制外键。
+
+旧字段修改：不存在。没有 MODIFY、CHANGE、RENAME 或 DROP 旧字段。
+
+# 4. model_definition 表审核
+
+表名与当前命名体系一致，无冲突。
+
+code 具有 uk_model_definition_code 唯一约束。id 为 BIGINT AUTO_INCREMENT。definition_json 和 class_order_json 均为原生 JSON。两个 SHA 字段均为 CHAR(64)。runtime_profile_id 为 VARCHAR(64)。
+
+status 默认 DISABLED 是安全默认值；seed 明确写入 ENABLED。表内索引覆盖 status、runtime_profile_id 和 model_family + variant。
+
+CREATE TABLE IF NOT EXISTS 可安全重复执行，但如果实时数据库已经存在同名且结构不兼容的表，它只会跳过，不会修复结构。因此执行前必须 SHOW CREATE TABLE model_definition；如果表不存在则符合预期。
+
+# 5. workflow.model_definition_id 审核
+
+动态 DDL 只在 information_schema 中确认该列不存在时执行：
+
+ALTER TABLE workflow ADD COLUMN model_definition_id bigint NULL AFTER client_model_asset_id
+
+结论：
+
+- 类型严格为 BIGINT。
+- 明确允许 NULL。
+- 没有默认 Definition。
+- 不影响已有行；历史行保持 NULL。
+- 不删除或修改 yolo_version、model_type、task_type 等旧字段。
+- 不增加外键。
+- Java Entity 已新增 modelDefinitionId，因此运行更新后的 Java 前必须先执行本 SQL。
+
+列存在性判断只按列名判断。如果实时数据库已有同名但错误类型的列，脚本会跳过；执行前应通过 SHOW COLUMNS 核对。
+
+# 6. YOLO Seed 审核
+
+Seed code：YOLOV8N_SHEEP_V1。
+
+静态解析和重算结果：
+
+- definition_json：合法 JSON。
+- modelFamily：YOLO。
+- version：YOLOv8。
+- variant：yolov8n。
+- taskType：DETECTION。
+- framework：Ultralytics。
+- frameworkVersion：8.4.41。
+- classCount：1。
+- classOrder：["sheep"]。
+- runtimeProfileId：YOLO_RUNTIME_V1。
+- 不存在 base model、pretrained checkpoint、checkpoint path 或同义字段。
+- architectureSignature：2510fa3d9b145fe4cc5072bca168770b7989c291729a967fb9b75717cd9db74a。
+- definitionSha256：302bbb5e00b03c3a14eabf316be8cdc5bbbd5e0de235c28a7a6cb0b491a22cd2。
+- JSON 内签名、表列签名和重新计算结果一致。
+- display_name 的 UTF-8 十六进制解码结果为 YOLOv8n 羊群检测。
+- class_order_json 使用 JSON_ARRAY('sheep')，与 definition_json 一致。
+
+# 7. 幂等性审核
+
+在当前预期 schema 下，整个文件可以重复执行：
+
+1. CREATE TABLE IF NOT EXISTS 不重复创建表。
+2. workflow 列通过 information_schema 检查，不重复 ADD COLUMN。
+3. workflow 索引通过索引名检查，不重复 CREATE INDEX。
+4. Seed 使用 INSERT ... SELECT ... WHERE NOT EXISTS，并由 code 唯一约束兜底，不会生成重复记录。
+5. SET、PREPARE、EXECUTE 和 DEALLOCATE 可以再次执行。
+
+没有只能执行一次的语句。
+
+边界说明：
+
+- Seed 是“防重复插入”，不是 upsert。若同 code 已存在但内容不同，重复执行会保留已有行，不会自动覆盖。执行后必须用第 11 节 SELECT 核验。
+- 列检查只看列名，索引检查只看索引名。若实时数据库存在同名但结构错误对象，脚本不会修复。
+- MySQL DDL 会隐式提交。若中途因权限或连接问题中断，可在排除原因后重跑；脚本会继续补齐缺失步骤。
+
+# 8. 与现有 Java Entity/Mapper 一致性
+
+ModelDefinition Entity：
+
+- @TableName("model_definition") 与 SQL 一致。
+- @TableId(type = IdType.AUTO) 与 BIGINT AUTO_INCREMENT 一致。
+- modelVersion 对应 model_version。
+- definitionJson 对应 definition_json。
+- architectureSignature 对应 architecture_signature。
+- definitionSha256 对应 definition_sha256。
+- runtimeProfileId 对应 runtime_profile_id。
+- classOrderJson 对应 class_order_json。
+- LocalDateTime 对应 DATETIME。
+
+ModelDefinitionMapper 继承 BaseMapper<ModelDefinition>，没有额外自定义表名或冲突 SQL。
+
+Workflow Entity 的 Long modelDefinitionId 按 MyBatis Plus camelCase 映射到 model_definition_id，与 BIGINT NULL 一致。
+
+# 9. 用户实际应该执行的 SQL 顺序
+
+1. 确认已选择正确数据库。
+2. 执行 SET NAMES utf8mb4。
+3. 创建 model_definition 表。
+4. 增加 workflow.model_definition_id nullable 列。
+5. 创建 idx_workflow_model_definition_id。
+6. 插入 YOLOV8N_SHEEP_V1 seed。
+7. 执行第 11 节只读验证 SQL。
+
+不要单独改变原文件内语句顺序。
+
+# 10. 执行前备份建议
+
+1. 对当前数据库做完整逻辑备份，至少包含 workflow 表结构和数据。
+2. 单独保存 SHOW CREATE TABLE workflow 和 SHOW INDEX FROM workflow 的结果。
+3. 确认备份文件可以读取，并记录备份时间。
+4. 在维护窗口执行，避免应用在 ALTER TABLE 期间持续写入。
+5. 先确认 MySQL 版本、当前 DATABASE() 和 @@sql_mode。
+6. 不要在未选定目标数据库时执行。
+7. 若 model_definition、model_definition_id 或目标索引已存在，先人工比较结构，不要仅依赖 IF EXISTS 判断。
+
+# 11. 执行后的验证 SQL
+
+以下语句仅供用户执行后验证，本轮未执行：
+
+SELECT VERSION() AS mysql_version, DATABASE() AS current_database, @@sql_mode AS sql_mode;
+
+SHOW CREATE TABLE model_definition;
+
+SHOW COLUMNS FROM workflow LIKE 'model_definition_id';
+
+SHOW INDEX FROM workflow WHERE Key_name = 'idx_workflow_model_definition_id';
+
+SELECT
+  id,
+  code,
+  display_name,
+  model_family,
+  model_version,
+  variant,
+  task_type,
+  framework,
+  framework_version,
+  definition_type,
+  definition_version,
+  architecture_signature,
+  definition_sha256,
+  runtime_profile_id,
+  class_count,
+  class_order_json,
+  ignore_index,
+  status,
+  created_at,
+  updated_at
+FROM model_definition
+WHERE code = 'YOLOV8N_SHEEP_V1';
+
+SELECT
+  JSON_VALID(definition_json) AS definition_json_valid,
+  JSON_UNQUOTE(JSON_EXTRACT(definition_json, '$.modelFamily')) AS model_family,
+  JSON_UNQUOTE(JSON_EXTRACT(definition_json, '$.version')) AS model_version,
+  JSON_UNQUOTE(JSON_EXTRACT(definition_json, '$.variant')) AS variant,
+  JSON_UNQUOTE(JSON_EXTRACT(definition_json, '$.taskType')) AS task_type,
+  JSON_UNQUOTE(JSON_EXTRACT(definition_json, '$.framework')) AS framework,
+  JSON_UNQUOTE(JSON_EXTRACT(definition_json, '$.frameworkVersion')) AS framework_version,
+  JSON_UNQUOTE(JSON_EXTRACT(definition_json, '$.runtimeProfileId')) AS runtime_profile_id,
+  JSON_UNQUOTE(JSON_EXTRACT(definition_json, '$.architectureSignature')) AS architecture_signature,
+  JSON_UNQUOTE(JSON_EXTRACT(definition_json, '$.definitionSha256')) AS definition_sha256,
+  JSON_EXTRACT(definition_json, '$.classOrder') AS class_order
+FROM model_definition
+WHERE code = 'YOLOV8N_SHEEP_V1';
+
+SELECT COUNT(*) AS definition_count
+FROM model_definition
+WHERE code = 'YOLOV8N_SHEEP_V1';
+
+SELECT COUNT(*) AS historical_workflow_bound_count
+FROM workflow
+WHERE model_definition_id IS NOT NULL;
+
+# 12. 原始 STAGE1B_SQL.sql 完整正文
+-- MANUAL EXECUTION ONLY
+-- DO NOT AUTO EXECUTE
+-- Stage 1B: ModelDefinition Registry and nullable workflow binding.
+
+SET NAMES utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `model_definition` (
+  `id` bigint NOT NULL AUTO_INCREMENT,
+  `code` varchar(64) NOT NULL,
+  `display_name` varchar(128) NOT NULL,
+  `model_family` varchar(64) NOT NULL,
+  `model_version` varchar(64) NOT NULL,
+  `variant` varchar(64) NOT NULL,
+  `task_type` varchar(64) NOT NULL,
+  `framework` varchar(64) NOT NULL,
+  `framework_version` varchar(64) NOT NULL,
+  `definition_type` varchar(64) NOT NULL,
+  `definition_version` varchar(32) NOT NULL,
+  `definition_json` json NOT NULL,
+  `architecture_signature` char(64) NOT NULL,
+  `definition_sha256` char(64) NOT NULL,
+  `runtime_profile_id` varchar(64) NOT NULL,
+  `class_count` int NOT NULL,
+  `class_order_json` json NOT NULL,
+  `ignore_index` int DEFAULT NULL,
+  `status` varchar(32) NOT NULL DEFAULT 'DISABLED',
+  `created_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_model_definition_code` (`code`),
+  KEY `idx_model_definition_status` (`status`),
+  KEY `idx_model_definition_runtime_profile` (`runtime_profile_id`),
+  KEY `idx_model_definition_family_variant` (`model_family`, `variant`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- Keep this migration repeatable without assigning a fake definition to history.
+SET @workflow_model_definition_column_sql = IF(
+  EXISTS(
+    SELECT 1
+    FROM information_schema.COLUMNS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'workflow'
+      AND COLUMN_NAME = 'model_definition_id'
+  ),
+  'SELECT 1',
+  'ALTER TABLE `workflow` ADD COLUMN `model_definition_id` bigint NULL AFTER `client_model_asset_id`'
+);
+PREPARE stage1b_column_stmt FROM @workflow_model_definition_column_sql;
+EXECUTE stage1b_column_stmt;
+DEALLOCATE PREPARE stage1b_column_stmt;
+
+SET @workflow_model_definition_index_sql = IF(
+  EXISTS(
+    SELECT 1
+    FROM information_schema.STATISTICS
+    WHERE TABLE_SCHEMA = DATABASE()
+      AND TABLE_NAME = 'workflow'
+      AND INDEX_NAME = 'idx_workflow_model_definition_id'
+  ),
+  'SELECT 1',
+  'CREATE INDEX `idx_workflow_model_definition_id` ON `workflow` (`model_definition_id`)'
+);
+PREPARE stage1b_index_stmt FROM @workflow_model_definition_index_sql;
+EXECUTE stage1b_index_stmt;
+DEALLOCATE PREPARE stage1b_index_stmt;
+
+-- definitionSha256 uses CANONICAL_JSON_SHA256_V1 with definitionSha256 blanked.
+-- The UTF-8 hex literal avoids client/terminal encoding damage during manual execution.
+INSERT INTO `model_definition` (
+  `code`,
+  `display_name`,
+  `model_family`,
+  `model_version`,
+  `variant`,
+  `task_type`,
+  `framework`,
+  `framework_version`,
+  `definition_type`,
+  `definition_version`,
+  `definition_json`,
+  `architecture_signature`,
+  `definition_sha256`,
+  `runtime_profile_id`,
+  `class_count`,
+  `class_order_json`,
+  `ignore_index`,
+  `status`
+)
+SELECT
+  'YOLOV8N_SHEEP_V1',
+  CONVERT(0x594f4c4f76386e20e7be8ae7bea4e6a380e6b58b USING utf8mb4),
+  'YOLO',
+  'YOLOv8',
+  'yolov8n',
+  'DETECTION',
+  'Ultralytics',
+  '8.4.41',
+  'ULTRALYTICS_DETECTION_MODEL',
+  '1.0',
+  CAST('{"schemaVersion":"1.0","definitionVersion":"1.0","definitionId":"YOLOV8N_SHEEP_V1","code":"YOLOV8N_SHEEP_V1","displayName":"YOLOv8n \\u7f8a\\u7fa4\\u68c0\\u6d4b","modelFamily":"YOLO","version":"YOLOv8","variant":"yolov8n","taskType":"DETECTION","framework":"Ultralytics","frameworkVersion":"8.4.41","definitionType":"ULTRALYTICS_DETECTION_MODEL","definitionPayload":{"architecture":{"nc":1,"depth_multiple":0.33,"width_multiple":0.25,"backbone":[[-1,1,"Conv",[64,3,2]],[-1,1,"Conv",[128,3,2]],[-1,3,"C2f",[128,true]],[-1,1,"Conv",[256,3,2]],[-1,6,"C2f",[256,true]],[-1,1,"Conv",[512,3,2]],[-1,6,"C2f",[512,true]],[-1,1,"Conv",[1024,3,2]],[-1,3,"C2f",[1024,true]],[-1,1,"SPPF",[1024,5]]],"head":[[-1,1,"nn.Upsample",["None",2,"nearest"]],[[-1,6],1,"Concat",[1]],[-1,3,"C2f",[512]],[-1,1,"nn.Upsample",["None",2,"nearest"]],[[-1,4],1,"Concat",[1]],[-1,3,"C2f",[256]],[-1,1,"Conv",[256,3,2]],[[-1,12],1,"Concat",[1]],[-1,3,"C2f",[512]],[-1,1,"Conv",[512,3,2]],[[-1,9],1,"Concat",[1]],[-1,3,"C2f",[1024]],[[15,18,21],1,"Detect",["nc"]]],"ch":3,"channels":3},"inputChannels":3,"names":{"0":"sheep"},"stride":[8,16,32],"imgsz":640,"parameterSemantics":"EMA_SNAPSHOT","preprocessing":{"implementation":"Ultralytics","resize":"LetterBox","colorConversion":"OpenCV BGR to RGB","layout":"BHWC to BCHW","normalization":"divide by 255 to [0,1]"},"trustedSource":{"type":"EXPERIMENT_VERIFIED_HANDOFF","phase1":"PASS","phase2":"PASS"}},"classCount":1,"classOrder":["sheep"],"ignoreIndex":null,"inputSpec":{"channels":3,"imageSize":640,"layout":"BCHW"},"runtimeProfileId":"YOLO_RUNTIME_V1","architectureSignature":"2510fa3d9b145fe4cc5072bca168770b7989c291729a967fb9b75717cd9db74a","definitionSha256":"302bbb5e00b03c3a14eabf316be8cdc5bbbd5e0de235c28a7a6cb0b491a22cd2","status":"ENABLED"}' AS JSON),
+  '2510fa3d9b145fe4cc5072bca168770b7989c291729a967fb9b75717cd9db74a',
+  '302bbb5e00b03c3a14eabf316be8cdc5bbbd5e0de235c28a7a6cb0b491a22cd2',
+  'YOLO_RUNTIME_V1',
+  1,
+  JSON_ARRAY('sheep'),
+  NULL,
+  'ENABLED'
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM `model_definition`
+  WHERE `code` = 'YOLOV8N_SHEEP_V1'
+);
+
+-- Intentionally absent: UPDATE workflow SET model_definition_id = ...
+-- Historical workflows remain NULL until an explicit future migration is approved.

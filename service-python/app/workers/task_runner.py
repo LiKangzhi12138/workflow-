@@ -4,7 +4,11 @@ from pathlib import Path
 
 from app.core.config import settings
 from app.core.logger import logger
-from app.models.request_models import STANDALONE_VALIDATION, WORKFLOW_VALIDATION
+from app.models.request_models import (
+    STANDALONE_VALIDATION,
+    WEIGHTS_PROTOCOL_V1,
+    WORKFLOW_VALIDATION,
+)
 from app.services.callback_service import callback_to_java
 from app.services.job_service import JOB_STORE
 from app.services.persistence_service import save_jobs_to_disk
@@ -185,9 +189,11 @@ def run_job_async(job_id: str):
             model_path_obj = Path(model_path).resolve() if model_path else None
             dataset_path_obj = Path(dataset_path).resolve() if dataset_path else None
 
+            validation_mode = job_data.get("validationMode", "LEGACY_CHECKPOINT")
             logger.info(
-                "starting local validation, jobType=%s, workflowId=%s, standaloneValidationId=%s, jobId=%s, modelPath=%s, datasetPath=%s, algorithmType=%s, sampleOutputDir=%s, modelExists=%s, modelReadable=%s, modelSize=%s, datasetExists=%s, datasetDirectory=%s",
+                "starting validation dispatch, jobType=%s, validationMode=%s, workflowId=%s, standaloneValidationId=%s, jobId=%s, modelPath=%s, datasetPath=%s, algorithmType=%s, sampleOutputDir=%s, modelExists=%s, modelReadable=%s, modelSize=%s, datasetExists=%s, datasetDirectory=%s",
                 job_type,
+                validation_mode,
                 job.get("workflowId"),
                 job.get("standaloneValidationId"),
                 job_id,
@@ -211,36 +217,49 @@ def run_job_async(job_id: str):
                     message=progress_message,
                 )
 
-            from app.services.yolo_validation_service import yolo_validation_service
+            validation_evidence = None
+            if validation_mode == WEIGHTS_PROTOCOL_V1:
+                report_validation_progress(10, "Checking trusted global weights")
+                from app.services.weights_validation_v1_service import weights_validation_v1_service
 
-            validation_result = yolo_validation_service.validate(
-                model_path=model_path,
-                dataset_path=dataset_path,
-                yolo_version=algorithm_type,
-                progress_callback=report_validation_progress,
-                sample_output_dir=sample_output_dir,
-            )
+                runtime_result = weights_validation_v1_service.validate_job(
+                    job_data,
+                    sample_output_directory=sample_output_dir,
+                )
+                validation_result = runtime_result.validationResult
+                metrics = runtime_result.metrics
+                validation_evidence = runtime_result.validationEvidence
+            else:
+                from app.services.yolo_validation_service import yolo_validation_service
 
-            if validation_result.get("error"):
-                raise RuntimeError(f"YOLO validation failed: {validation_result['error']}")
+                validation_result = yolo_validation_service.validate(
+                    model_path=model_path,
+                    dataset_path=dataset_path,
+                    yolo_version=algorithm_type,
+                    progress_callback=report_validation_progress,
+                    sample_output_dir=sample_output_dir,
+                )
 
-            metrics = {
-                "mAP": validation_result.get("map50"),
-                "precision": validation_result.get("precision"),
-                "recall": validation_result.get("recall"),
-                "map50": validation_result.get("map50"),
-                "map50_95": validation_result.get("map50_95"),
-                "accuracy": validation_result.get("accuracy"),
-                "totalImages": validation_result.get("total_images"),
-                "cropDetections": validation_result.get("crop_detections"),
-                "livestockDetections": validation_result.get("livestock_detections"),
-                "perClassResults": validation_result.get("per_class_results"),
-                "fallback": bool(validation_result.get("fallback")),
-                "fallbackReason": validation_result.get("fallback_reason"),
-            }
+                if validation_result.get("error"):
+                    raise RuntimeError(f"YOLO validation failed: {validation_result['error']}")
+
+                metrics = {
+                    "mAP": validation_result.get("map50"),
+                    "precision": validation_result.get("precision"),
+                    "recall": validation_result.get("recall"),
+                    "map50": validation_result.get("map50"),
+                    "map50_95": validation_result.get("map50_95"),
+                    "accuracy": validation_result.get("accuracy"),
+                    "totalImages": validation_result.get("total_images"),
+                    "cropDetections": validation_result.get("crop_detections"),
+                    "livestockDetections": validation_result.get("livestock_detections"),
+                    "perClassResults": validation_result.get("per_class_results"),
+                    "fallback": bool(validation_result.get("fallback")),
+                    "fallbackReason": validation_result.get("fallback_reason"),
+                }
 
             logger.info(
-                "local validation finished, jobType=%s, workflowId=%s, standaloneValidationId=%s, jobId=%s, accuracy=%s, map50=%s, sampleResultCount=%s, renderedImageMode=%s, fallback=%s",
+                "local validation finished, jobType=%s, workflowId=%s, standaloneValidationId=%s, jobId=%s, accuracy=%s, map50=%s, sampleResultCount=%s, renderedImageMode=%s, metricsFallbackUsed=%s, metricsFallbackReason=%s",
                 job_type,
                 job.get("workflowId"),
                 job.get("standaloneValidationId"),
@@ -250,6 +269,7 @@ def run_job_async(job_id: str):
                 len(validation_result.get("sample_results") or []),
                 validation_result.get("visualization_mode"),
                 metrics.get("fallback"),
+                metrics.get("fallbackReason"),
             )
 
             result = save_result(
@@ -257,6 +277,7 @@ def run_job_async(job_id: str):
                 job_type=job_type,
                 metrics=metrics,
                 validation_result=validation_result,
+                validation_evidence=validation_evidence,
                 workflow_id=job.get("workflowId"),
                 standalone_validation_id=job.get("standaloneValidationId"),
             )

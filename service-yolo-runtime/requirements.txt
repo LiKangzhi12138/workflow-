@@ -1,0 +1,15 @@
+fastapi==0.110.0
+uvicorn==0.27.1
+pydantic==2.6.4
+matplotlib==3.9.2
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+Pillow==10.4.0
+PyYAML==6.0.2
+requests==2.32.3
+scipy==1.14.1
+psutil==6.1.1
+py-cpuinfo==9.0.0
+polars==1.31.0
+ultralytics-thop==2.0.18
+ultralytics==8.4.41

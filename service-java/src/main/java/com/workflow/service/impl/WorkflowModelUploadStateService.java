@@ -79,6 +79,30 @@ public class WorkflowModelUploadStateService {
     }
 
     @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
+    public void markWeightsProtocolSucceeded(
+            Long workflowId,
+            Long uploadId,
+            String weightsFilePath,
+            Long serverModelAssetId
+    ) {
+        WorkflowModelUpload record = workflowModelUploadMapper.selectTrackedById(uploadId);
+        if (record == null || isDeleted(record.getIsDeleted())) {
+            throw new IllegalStateException("Upload record disappeared during weights protocol finalization.");
+        }
+        WorkflowModelUpload update = new WorkflowModelUpload();
+        update.setId(uploadId);
+        update.setDecryptedFilePath(weightsFilePath);
+        update.setServerModelAssetId(serverModelAssetId);
+        update.setUploadStatus(UPLOAD_STATUS_COMPLETED);
+        update.setAggregationStatus("INSPECTED");
+        update.setErrorMessage(null);
+        workflowModelUploadMapper.updateDecryptResult(update);
+        if (!UPLOAD_STATUS_COMPLETED.equals(record.getUploadStatus())) {
+            workflowMapper.incrementCollectedModelCount(resolveWorkflowId(workflowId, record));
+        }
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW, rollbackFor = Exception.class)
     public void markDecryptFailed(Long uploadId, String decryptedFilePath, String errorMessage) {
         WorkflowModelUpload record = workflowModelUploadMapper.selectTrackedById(uploadId);
         if (record == null || isDeleted(record.getIsDeleted())) {
