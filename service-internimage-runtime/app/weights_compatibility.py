@@ -34,7 +34,7 @@ def check_weights_compatibility(
         )
 
     try:
-        model = build_model()
+        model = build_model(definition)
         expected = OrderedDict(
             (
                 key,

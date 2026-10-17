@@ -52,6 +52,15 @@ public class ValidationResultController {
         return buildImageResponse(validationResultService.getWorkflowSampleImagePath(workflowId, sampleIndex));
     }
 
+    @GetMapping("/workflows/{workflowId}/samples/{sampleIndex}/{artifact:source|mask}")
+    public ResponseEntity<ByteArrayResource> getWorkflowValidationSampleArtifact(
+            @PathVariable Long workflowId,
+            @PathVariable int sampleIndex,
+            @PathVariable String artifact
+    ) throws Exception {
+        return buildImageResponse(validationResultService.getWorkflowSampleArtifactPath(workflowId, sampleIndex, artifact));
+    }
+
     private ResponseEntity<ByteArrayResource> buildImageResponse(Path imagePath) throws Exception {
         log.info("Serving validation sample image: imagePath={}", imagePath);
         byte[] bytes = Files.readAllBytes(imagePath);

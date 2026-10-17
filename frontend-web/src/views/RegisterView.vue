@@ -4,7 +4,6 @@
       <template #header>
         <div class="card-header">
           <div class="card-title">{{ SYSTEM_NAME_FULL }}</div>
-          <div class="card-subtitle">注册后即可进入 {{ SYSTEM_NAME_SHORT }} 的客户端或服务端工作区</div>
         </div>
       </template>
 
@@ -68,7 +67,7 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { registerApi, resolveRegisterUrl } from '@/api/auth'
-import { SYSTEM_NAME_FULL, SYSTEM_NAME_SHORT } from '@/constants/system'
+import { SYSTEM_NAME_FULL } from '@/constants/system'
 
 const router = useRouter()
 const loading = ref(false)

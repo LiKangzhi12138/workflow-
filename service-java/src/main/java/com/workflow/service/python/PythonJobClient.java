@@ -21,6 +21,7 @@ import org.springframework.web.client.RestTemplate;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Map;
 
 @Service
 @Slf4j
@@ -112,6 +113,52 @@ public class PythonJobClient {
                     ex.getClass().getSimpleName()
             );
             throw new BusinessException("PYTHON_CREATE_JOB_REQUEST_FAILED", summary, ex);
+        }
+    }
+
+    public void checkSegmentationDataset(JsonNode trustedDefinition, String runtimeProfileId, String datasetPath) {
+        String url = properties.getPythonBaseUrl() + "/internal/validation/check-dataset-v1";
+        Map<String, Object> payload = Map.of(
+                "modelDefinition", trustedDefinition,
+                "runtimeProfileId", runtimeProfileId,
+                "datasetPath", datasetPath
+        );
+        try {
+            ResponseEntity<JsonNode> response = restTemplate.exchange(
+                    url, HttpMethod.POST, new HttpEntity<>(payload, buildJsonHeaders()), JsonNode.class);
+            JsonNode result = response.getBody();
+            if (result == null || !result.path("passed").asBoolean(false)) {
+                throw new BusinessException("DATASET_PREFLIGHT_FAILED", "数据集验证未通过，请检查图片与标签。");
+            }
+        } catch (HttpStatusCodeException ex) {
+            if (ex.getStatusCode().value() != 422) {
+                throw new BusinessException("RUNTIME_REQUEST_FAILED", "模型运行服务暂不可用，请稍后重试。", ex);
+            }
+            String code = "DATASET_PREFLIGHT_FAILED";
+            try {
+                JsonNode detail = objectMapper.readTree(ex.getResponseBodyAsString(StandardCharsets.UTF_8)).path("detail");
+                String remoteCode = detail.path("reasonCode").asText();
+                if (List.of("MASK_MISSING", "MASK_LABEL_INVALID", "DATASET_INVALID", "PATH_NOT_ALLOWED",
+                        "MODEL_DEFINITION_MISMATCH", "RUNTIME_REQUEST_SCHEMA_INVALID").contains(remoteCode)) {
+                    code = remoteCode;
+                }
+            } catch (Exception ignored) {
+                // Remote errors are untrusted; a generic message is safer than their raw body.
+            }
+            String message = switch (code) {
+                case "MASK_MISSING" -> "图片与标签文件名不匹配，或缺少对应的 PNG 标签。";
+                case "MASK_LABEL_INVALID" -> "分割标签包含模型定义之外的类别值。";
+                case "DATASET_INVALID" -> "分割数据集需要可读取、尺寸一致的 images/ 与 masks/ 文件。";
+                case "PATH_NOT_ALLOWED" -> "验证数据集不在受控存储目录内。";
+                case "MODEL_DEFINITION_MISMATCH" -> "数据集检查的模型定义不一致。";
+                case "RUNTIME_REQUEST_SCHEMA_INVALID" -> "模型运行服务请求格式不匹配。";
+                default -> "分割数据集检查失败，请查看服务端日志。";
+            };
+            throw new BusinessException(code, message, ex);
+        } catch (BusinessException ex) {
+            throw ex;
+        } catch (RuntimeException ex) {
+            throw new BusinessException("RUNTIME_UNAVAILABLE", "模型运行服务连接失败，请稍后重试。", ex);
         }
     }
 

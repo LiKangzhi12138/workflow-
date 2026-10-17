@@ -1,6 +1,8 @@
 package com.workflow.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.Wrapper;
+import com.baomidou.mybatisplus.core.MybatisConfiguration;
+import com.baomidou.mybatisplus.core.metadata.TableInfoHelper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.workflow.config.PythonIntegrationProperties;
@@ -23,7 +25,9 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.ArgumentCaptor;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.apache.ibatis.builder.MapperBuilderAssistant;
 
 import java.util.List;
 import java.util.Map;
@@ -32,6 +36,7 @@ import java.util.Set;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -132,6 +137,24 @@ class WorkflowServiceImplReadModelDefinitionTest {
         assertEquals("YOLO", item.getModelDefinitionFamily());
         assertEquals("YOLOv8", item.getModelDefinitionVersion());
         assertEquals("YOLOv8", item.getYoloVersion());
+    }
+
+    @Test
+    void workflowListsUsePersistentUpdateTimeAndStableIdOrdering() {
+        stubPage("SERVER", workflow(1L));
+        MapperBuilderAssistant assistant = new MapperBuilderAssistant(new MybatisConfiguration(), "");
+        assistant.setCurrentNamespace("workflow-list-test");
+        TableInfoHelper.initTableInfo(assistant, Workflow.class);
+
+        workflowService.pageWorkflows(1, 10, null);
+
+        ArgumentCaptor<Wrapper<Workflow>> wrapperCaptor = ArgumentCaptor.forClass(Wrapper.class);
+        verify(workflowMapper).selectPage(any(Page.class), wrapperCaptor.capture());
+        String sqlSegment = wrapperCaptor.getValue().getSqlSegment();
+        assertTrue(sqlSegment.contains("updated_at DESC"), sqlSegment);
+        assertTrue(sqlSegment.contains("id DESC"), sqlSegment);
+        assertTrue(sqlSegment.contains("is_deleted"), sqlSegment);
+        assertTrue(sqlSegment.contains("server_user_id"), sqlSegment);
     }
 
     @Test

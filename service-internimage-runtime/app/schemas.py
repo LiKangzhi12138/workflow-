@@ -101,3 +101,54 @@ class WeightsCompatibilityResult(StrictModel):
     unexpectedKeyCount: int = 0
     shapeMismatchCount: int = 0
     dtypeMismatchCount: int = 0
+
+
+class GlobalWeightsInput(StrictModel):
+    assetId: int
+    weightsPath: str
+    expectedSha256: str
+    expectedTensorCount: int
+    expectedElementCount: int
+    expectedStateDictKeyHash: str
+    expectedShapeSignature: str
+    expectedDtypeSignature: str
+
+
+class WeightsValidationRequest(StrictModel):
+    workflowId: int
+    jobId: str
+    modelDefinition: dict[str, Any]
+    runtimeProfileId: str
+    globalWeights: GlobalWeightsInput
+    datasetPath: str
+    sampleOutputDirectory: str
+    algorithmType: str
+
+
+class DatasetCheckRequest(StrictModel):
+    modelDefinition: dict[str, Any]
+    runtimeProfileId: str
+    datasetPath: str
+
+
+class DatasetCheckResult(StrictModel):
+    passed: bool
+    reasonCode: str
+    message: str
+    imageCount: int
+
+
+class WeightsValidationResult(StrictModel):
+    passed: bool
+    reasonCode: str
+    message: str
+    runtimeProfileId: str
+    modelDefinitionId: str
+    modelDefinitionCode: str
+    definitionSha256: str
+    architectureSignature: str
+    weightsSha256: str
+    reconstruction: dict[str, Any]
+    metrics: dict[str, Any]
+    validationResult: dict[str, Any]
+    validationEvidence: dict[str, Any]

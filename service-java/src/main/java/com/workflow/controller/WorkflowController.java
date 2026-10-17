@@ -71,6 +71,12 @@ public class WorkflowController {
         return ApiResponse.success(null);
     }
 
+    @PostMapping("/{id}/validation/retry")
+    public ApiResponse<Void> retryValidation(@PathVariable Long id) {
+        workflowService.retryValidation(id);
+        return ApiResponse.success(null);
+    }
+
     @PostMapping("/{id}/results/save")
     public ApiResponse<Void> saveWorkflowResult(@PathVariable Long id) {
         log.info("workflow save result request received: workflowId={}", id);

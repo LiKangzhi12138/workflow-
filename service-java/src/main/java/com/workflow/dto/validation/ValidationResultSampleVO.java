@@ -13,6 +13,10 @@ public class ValidationResultSampleVO {
 
     private String imageUrl;
 
+    private String sourceImageUrl;
+
+    private String predictionMaskUrl;
+
     private Boolean isAnnotated;
 
     private Boolean annotatedImageAvailable;

@@ -1,9 +1,6 @@
 <template>
   <div class="workbench">
-    <el-alert type="info" :closable="false" show-icon class="intro-alert">
-      <template #title>{{ headerTitle }}</template>
-      <div>{{ headerDesc }}</div>
-    </el-alert>
+    <div class="workbench-title">{{ headerTitle }}</div>
 
     <el-alert
       type="warning"
@@ -298,12 +295,6 @@ const datasetFileList = ref<UploadUserFile[]>([])
 let pollTimer: number | null = null
 
 const headerTitle = computed(() => (isServer.value ? '服务端独立验证工作台' : '客户端独立验证工作台'))
-const headerDesc = computed(() =>
-  isServer.value
-    ? '服务端可以使用浏览器上传、服务端路径导入或工作流自动纳管的正式资产发起验证，也可以临时上传模型和数据集做一次性验证。'
-    : '客户端独立验证默认走临时上传模式。验证完成后保留结果，不保留本次临时上传的模型与数据集。'
-)
-
 const hintText = computed(() => {
   const parts: string[] = []
   if (route.query.modelName) {
@@ -637,6 +628,12 @@ onUnmounted(() => {
 </script>
 
 <style scoped>
+.workbench-title {
+  margin-bottom: 14px;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1f2937;
+}
 .workbench {
   display: flex;
   flex-direction: column;

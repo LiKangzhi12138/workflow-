@@ -112,6 +112,9 @@ class Settings:
             "WEIGHTS_VALIDATION_V1_ENABLED",
             default=False,
         )
+        self.INTERNIMAGE_RUNTIME_VALIDATION_READ_TIMEOUT_SECONDS = _get_float(
+            "INTERNIMAGE_RUNTIME_VALIDATION_READ_TIMEOUT_SECONDS", default=1800.0
+        )
         self.WEIGHTS_PROTOCOL_ALLOWED_ROOTS = _get_str(
             "WEIGHTS_PROTOCOL_ALLOWED_ROOTS",
             default=str(Path(self.PY_STORAGE_ROOT).parent),

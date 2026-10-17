@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from app.definition_check import check_definition
 from app.runtime_probe import probe_runtime
@@ -12,8 +12,13 @@ from app.schemas import (
     RuntimeHealthResponse,
     WeightsCompatibilityRequest,
     WeightsCompatibilityResult,
+    WeightsValidationRequest,
+    WeightsValidationResult,
+    DatasetCheckRequest,
+    DatasetCheckResult,
 )
 from app.weights_compatibility import check_weights_compatibility
+from app.weights_validation import WeightsValidationError, check_dataset, run_validation
 
 
 logging.basicConfig(
@@ -69,3 +74,30 @@ def weights_compatibility_check(
         payload.runtimeProfileId,
         payload.state,
     )
+
+
+@app.post("/internal/runtime/validate-weights-v1", response_model=WeightsValidationResult)
+def validate_weights(payload: WeightsValidationRequest) -> WeightsValidationResult:
+    try:
+        return run_validation(payload)
+    except WeightsValidationError as exc:
+        logger.warning(
+            "InternImage weights validation rejected: workflowId=%s jobId=%s assetId=%s "
+            "runtimeProfileId=%s stage=%s reasonCode=%s",
+            payload.workflowId,
+            payload.jobId,
+            payload.globalWeights.assetId,
+            payload.runtimeProfileId,
+            exc.phase or "REQUEST_VALIDATION",
+            exc.code,
+        )
+        raise HTTPException(status_code=422, detail={"reasonCode": exc.code, "message": str(exc)}) from exc
+
+
+@app.post("/internal/runtime/check-dataset-v1", response_model=DatasetCheckResult)
+def dataset_check(payload: DatasetCheckRequest) -> DatasetCheckResult:
+    try:
+        return check_dataset(payload)
+    except WeightsValidationError as exc:
+        logger.warning("InternImage dataset rejected: reason=%s", exc.code)
+        raise HTTPException(status_code=422, detail={"reasonCode": exc.code, "message": str(exc)}) from exc

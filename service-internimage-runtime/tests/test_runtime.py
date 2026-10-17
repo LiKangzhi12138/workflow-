@@ -114,7 +114,7 @@ def test_manual_sql_seed_contains_the_exact_canonical_definition():
 
 def test_definition_architecture_only_build_passes_without_checkpoint(monkeypatch):
     monkeypatch.setattr(definition_check, "probe_runtime", ready_health)
-    monkeypatch.setattr(definition_check, "build_model", FakeModel)
+    monkeypatch.setattr(definition_check, "build_model", lambda *_args: FakeModel())
 
     result = definition_check.check_definition(definition(), "INTERNIMAGE_RUNTIME_V1")
 
@@ -141,7 +141,7 @@ def test_weights_compatibility_accepts_exact_architecture_state(monkeypatch):
         "check_definition",
         lambda _definition, _profile: SimpleNamespace(available=True),
     )
-    monkeypatch.setattr(weights_compatibility, "build_model", lambda: model)
+    monkeypatch.setattr(weights_compatibility, "build_model", lambda *_args: model)
 
     result = weights_compatibility.check_weights_compatibility(
         definition(),
@@ -205,7 +205,7 @@ def test_weights_compatibility_rejects_state_contract_mismatch(monkeypatch, stat
         "check_definition",
         lambda _definition, _profile: SimpleNamespace(available=True),
     )
-    monkeypatch.setattr(weights_compatibility, "build_model", lambda: model)
+    monkeypatch.setattr(weights_compatibility, "build_model", lambda *_args: model)
 
     result = weights_compatibility.check_weights_compatibility(
         definition(), "INTERNIMAGE_RUNTIME_V1", state

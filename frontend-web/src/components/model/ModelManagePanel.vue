@@ -4,25 +4,13 @@
       <div class="hero">
         <div>
           <div class="page-title">{{ title }}</div>
-          <div class="page-desc">{{ desc }}</div>
         </div>
         <div class="hero-tags">
-          <el-tag type="info">运行模式：{{ runtimeProfile?.runtimeMode || '-' }}</el-tag>
           <el-tag :type="activeRecordMode === 'FORMAL_ASSET' ? 'warning' : 'success'">
             {{ activeRecordMode === 'FORMAL_ASSET' ? '正式模型资产' : '客户端路径登记簿' }}
           </el-tag>
         </div>
       </div>
-
-      <el-alert type="info" :closable="false" show-icon class="intro-alert">
-        <template #title>{{ isServer ? '这是服务端正式模型资产库' : '这是客户端模型资产管理页' }}</template>
-        <div v-if="isServer">
-          可通过浏览器上传或服务端路径导入创建正式资产；工作流解密模型和联邦聚合模型也会自动纳管到这里。
-        </div>
-        <div v-else>
-          路径登记只记录模型名称和本地路径；浏览器不会仅凭登记的路径读取电脑文件。也可以上传模型形成正式资产。
-        </div>
-      </el-alert>
 
       <el-alert
         v-if="isServer"

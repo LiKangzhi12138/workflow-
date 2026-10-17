@@ -17,4 +17,6 @@ public interface ValidationResultService {
     Path getStandaloneSampleImagePath(Long validationId, int sampleIndex);
 
     Path getWorkflowSampleImagePath(Long workflowId, int sampleIndex);
+
+    Path getWorkflowSampleArtifactPath(Long workflowId, int sampleIndex, String artifact);
 }

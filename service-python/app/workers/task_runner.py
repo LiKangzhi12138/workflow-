@@ -280,6 +280,7 @@ def run_job_async(job_id: str):
                 validation_evidence=validation_evidence,
                 workflow_id=job.get("workflowId"),
                 standalone_validation_id=job.get("standaloneValidationId"),
+                dataset_asset_id=job.get("datasetAssetId"),
             )
 
             update_job(

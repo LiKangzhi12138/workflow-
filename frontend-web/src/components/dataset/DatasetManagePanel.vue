@@ -4,25 +4,13 @@
       <div class="hero">
         <div>
           <div class="page-title">{{ title }}</div>
-          <div class="page-desc">{{ desc }}</div>
         </div>
         <div class="hero-tags">
-          <el-tag type="info">运行模式：{{ runtimeProfile?.runtimeMode || '-' }}</el-tag>
           <el-tag :type="activeRecordMode === 'FORMAL_ASSET' ? 'warning' : 'success'">
             {{ activeRecordMode === 'FORMAL_ASSET' ? '正式数据集资产' : '客户端路径登记簿' }}
           </el-tag>
         </div>
       </div>
-
-      <el-alert type="info" :closable="false" show-icon class="intro-alert">
-        <template #title>{{ isServer ? '这是服务端正式数据集资产库' : '这是客户端数据集资产管理页' }}</template>
-        <div v-if="isServer">
-          可通过浏览器上传 zip 包，或从服务器允许目录导入正式数据集资产。
-        </div>
-        <div v-else>
-          路径登记只记录本地数据集目录或 zip 路径；客户端独立验证时仍需重新选择文件。也可以上传 zip 包形成正式资产。
-        </div>
-      </el-alert>
 
       <el-alert
         v-if="isServer"

@@ -159,7 +159,7 @@ class StubClient:
 
     def health(self):
         if self.unavailable:
-            raise InternImageRuntimeClientError("unreachable")
+            raise InternImageRuntimeClientError("RUNTIME_UNAVAILABLE", "unreachable")
         return health(self.profile_id)
 
     def check_definition(self, value, runtime_profile_id):

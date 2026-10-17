@@ -10,6 +10,7 @@ public class PythonCreateJobRequest {
     private String jobType;
     private Long workflowId;
     private Long standaloneValidationId;
+    private Long datasetAssetId;
     private String modelPath;
     private String datasetPath;
     private String algorithmType;

@@ -4,7 +4,6 @@
       <template #header>
         <div class="card-header">
           <div class="card-title">{{ SYSTEM_NAME_FULL }}</div>
-          <div class="card-subtitle">登录后按客户端或服务端角色进入 {{ SYSTEM_NAME_SHORT }}</div>
         </div>
       </template>
 
@@ -54,7 +53,7 @@ import { ElMessage } from 'element-plus'
 import type { FormInstance, FormRules } from 'element-plus'
 import { loginApi, resolveLoginUrl } from '@/api/auth'
 import { saveLoginUser } from '@/utils/auth'
-import { SYSTEM_NAME_FULL, SYSTEM_NAME_SHORT } from '@/constants/system'
+import { SYSTEM_NAME_FULL } from '@/constants/system'
 
 const router = useRouter()
 const loading = ref(false)

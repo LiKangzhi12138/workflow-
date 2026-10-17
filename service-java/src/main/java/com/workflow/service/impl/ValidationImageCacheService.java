@@ -81,6 +81,7 @@ public class ValidationImageCacheService {
                                                                      Long userId,
                                                                      String ownerType,
                                                                      Long ownerId,
+                                                                     String jobId,
                                                                      List<SourceSampleImage> sourceImages) {
         Path cacheDir = resolveValidationImageCacheDir(roleCode, userId);
         int deletedImageCount = clearValidationImageCache(roleCode, userId);
@@ -89,6 +90,7 @@ public class ValidationImageCacheService {
         manifest.setUserId(userId);
         manifest.setOwnerType(ownerType);
         manifest.setOwnerId(ownerId);
+        manifest.setJobId(jobId);
         manifest.setCacheDir(cacheDir.toString());
         manifest.setGeneratedAt(java.time.LocalDateTime.now().toString());
 
@@ -258,6 +260,7 @@ public class ValidationImageCacheService {
         private Long userId;
         private String ownerType;
         private Long ownerId;
+        private String jobId;
         private String cacheDir;
         private String generatedAt;
         private List<CachedValidationImageEntry> entries = new ArrayList<>();

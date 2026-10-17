@@ -14,6 +14,7 @@ def save_result(
     validation_evidence: Optional[Dict[str, Any]] = None,
     workflow_id: Optional[int] = None,
     standalone_validation_id: Optional[int] = None,
+    dataset_asset_id: Optional[int] = None,
 ):
     result_dir = settings.validation_output_root_path()
     result_dir.mkdir(parents=True, exist_ok=True)
@@ -36,12 +37,16 @@ def save_result(
     )
 
     result_data = {
+        "schemaVersion": "1.0",
         "jobId": job_id,
         "jobType": job_type,
         "workflowId": workflow_id,
         "standaloneValidationId": standalone_validation_id,
+        "datasetAssetId": dataset_asset_id,
         "generatedAt": datetime.now(timezone.utc).isoformat(),
         "metrics": safe_metrics,
+        "taskType": safe_metrics.get("taskType", "DETECTION"),
+        "metricsMode": safe_metrics.get("metricsMode"),
         "fallback": fallback,
         "fallbackReason": fallback_reason,
         "visualizationMode": safe_validation_result.get("visualization_mode", "METRICS_ONLY"),
@@ -117,6 +122,8 @@ def _normalize_sample_results(sample_results: Any) -> List[Dict[str, Any]]:
                 or item.get("predictionCount")
                 or len(normalized_predictions),
                 "predictions": normalized_predictions,
+                "predictionMaskPath": item.get("prediction_mask_path") or item.get("predictionMaskPath"),
+                "groundTruthMaskPath": item.get("ground_truth_mask_path") or item.get("groundTruthMaskPath"),
             }
         )
     return normalized

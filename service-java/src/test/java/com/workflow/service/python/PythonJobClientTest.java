@@ -79,6 +79,37 @@ class PythonJobClientTest {
         server.verify();
     }
 
+    @Test
+    void datasetPreflightPreservesKnownReasonWithoutLeakingRuntimeBody() throws Exception {
+        RestTemplate restTemplate = new RestTemplate();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        PythonJobClient client = new PythonJobClient(restTemplate, pythonProperties(), objectMapper);
+        server.expect(requestTo("http://python-service/internal/validation/check-dataset-v1"))
+                .andExpect(method(HttpMethod.POST))
+                .andRespond(withStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .body("{\"detail\":{\"reasonCode\":\"MASK_MISSING\",\"message\":\"private /storage/path\"}}"));
+
+        BusinessException error = assertThrows(BusinessException.class, () -> client.checkSegmentationDataset(
+                objectMapper.readTree("{\"definitionId\":\"INTERNIMAGE_T_UPERNET_WHEAT_V1\"}"),
+                "INTERNIMAGE_RUNTIME_V1", "/managed/dataset"));
+        assertEquals("MASK_MISSING", error.getCode());
+        assertEquals("图片与标签文件名不匹配，或缺少对应的 PNG 标签。", error.getMessage());
+        server.verify();
+    }
+
+    @Test
+    void datasetPreflightDoesNotMislabelRuntimeFailureAsDatasetError() throws Exception {
+        RestTemplate restTemplate = new RestTemplate();
+        MockRestServiceServer server = MockRestServiceServer.bindTo(restTemplate).build();
+        PythonJobClient client = new PythonJobClient(restTemplate, pythonProperties(), objectMapper);
+        server.expect(requestTo("http://python-service/internal/validation/check-dataset-v1"))
+                .andRespond(withStatus(HttpStatus.INTERNAL_SERVER_ERROR));
+        BusinessException error = assertThrows(BusinessException.class, () -> client.checkSegmentationDataset(
+                objectMapper.readTree("{}"), "INTERNIMAGE_RUNTIME_V1", "/managed/dataset"));
+        assertEquals("RUNTIME_REQUEST_FAILED", error.getCode());
+    }
+
     private PythonIntegrationProperties pythonProperties() {
         PythonIntegrationProperties properties = new PythonIntegrationProperties();
         properties.setPythonBaseUrl("http://python-service");

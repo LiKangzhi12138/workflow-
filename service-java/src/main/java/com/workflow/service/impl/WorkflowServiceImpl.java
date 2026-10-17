@@ -1,6 +1,7 @@
 package com.workflow.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.baomidou.mybatisplus.core.conditions.update.LambdaUpdateWrapper;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -40,6 +41,7 @@ import com.workflow.service.python.PythonJobClient;
 import com.workflow.support.WorkflowCurrentStepSupport;
 import com.workflow.support.WorkflowErrorSummarySupport;
 import com.workflow.support.WorkflowStepTextCatalog;
+import com.workflow.support.AssetSourceCatalog;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -98,17 +100,6 @@ public class WorkflowServiceImpl implements WorkflowService {
             throw new RuntimeException("serverUserId 对应的用户不是 SERVER 角色");
         }
 
-        ModelAsset clientModel = modelAssetMapper.selectOne(
-                new LambdaQueryWrapper<ModelAsset>()
-                        .eq(ModelAsset::getId, request.getClientModelAssetId())
-                        .eq(ModelAsset::getOwnerUserId, currentUser.getId())
-                        .eq(ModelAsset::getIsDeleted, 0)
-                        .last("limit 1")
-        );
-        if (clientModel == null) {
-            throw new RuntimeException("所选模型不存在或无权访问");
-        }
-
         Integer clientModelCount = request.getClientModelCount();
         if (clientModelCount == null || clientModelCount < 1) {
             throw new RuntimeException("客户端模型数量必须大于等于 1");
@@ -117,12 +108,29 @@ public class WorkflowServiceImpl implements WorkflowService {
         WorkflowModelDefinitionSelectionService.WorkflowModelSelection modelSelection =
                 workflowModelDefinitionSelectionService.resolve(request);
 
+        if (modelSelection.modelDefinitionId() == null && request.getClientModelAssetId() == null) {
+            throw new RuntimeException("旧版工作流必须选择客户端模型");
+        }
+        ModelAsset clientModel = null;
+        if (request.getClientModelAssetId() != null) {
+            clientModel = modelAssetMapper.selectOne(
+                    new LambdaQueryWrapper<ModelAsset>()
+                            .eq(ModelAsset::getId, request.getClientModelAssetId())
+                            .eq(ModelAsset::getOwnerUserId, currentUser.getId())
+                            .eq(ModelAsset::getIsDeleted, 0)
+                            .last("limit 1")
+            );
+            if (clientModel == null) {
+                throw new RuntimeException("所选模型不存在或无权访问");
+            }
+        }
+
         Workflow workflow = new Workflow();
         workflow.setWorkflowCode(generateWorkflowCode());
         workflow.setWorkflowName(request.getWorkflowName());
         workflow.setInitiatorUserId(currentUser.getId());
         workflow.setServerUserId(serverUser.getId());
-        workflow.setClientModelAssetId(clientModel.getId());
+        workflow.setClientModelAssetId(clientModel == null ? null : clientModel.getId());
         workflow.setModelDefinitionId(modelSelection.modelDefinitionId());
         workflow.setServerDatasetAssetId(null);
         workflow.setClientModelCount(clientModelCount);
@@ -179,7 +187,8 @@ public class WorkflowServiceImpl implements WorkflowService {
                 WorkflowStatusEnum.CREATED.getCode(),
                 currentUser.getId(),
                 currentUser.getRoleCode(),
-                WorkflowStepTextCatalog.initiateMessage(clientModel.getAssetName())
+                WorkflowStepTextCatalog.initiateMessage(
+                        clientModel == null ? modelSelection.displayName() : clientModel.getAssetName())
         );
 
         return workflow.getId();
@@ -193,7 +202,8 @@ public class WorkflowServiceImpl implements WorkflowService {
 
         LambdaQueryWrapper<Workflow> wrapper = new LambdaQueryWrapper<Workflow>()
                 .eq(Workflow::getIsDeleted, 0)
-                .orderByDesc(Workflow::getCreatedAt);
+                .orderByDesc(Workflow::getUpdatedAt)
+                .orderByDesc(Workflow::getId);
 
         if (StringUtils.hasText(status)) {
             wrapper.eq(Workflow::getStatus, status);
@@ -617,9 +627,25 @@ public class WorkflowServiceImpl implements WorkflowService {
         if (datasetAsset == null) {
             throw new RuntimeException("未绑定服务端数据集，请先绑定后再启动验证任务。");
         }
+        if (weightsValidation != null
+                && "SEMANTIC_SEGMENTATION".equals(weightsValidation.trustedModelDefinition().path("taskType").asText())
+                && (!Objects.equals(datasetAsset.getOwnerUserId(), currentUser.getId())
+                    || !AssetSourceCatalog.RECORD_MODE_FORMAL_ASSET.equals(datasetAsset.getRecordMode())
+                    || !"READY".equals(datasetAsset.getStatus())
+                    || !"OK".equals(datasetAsset.getLastCheckStatus())
+                    || !"SEMANTIC_SEGMENTATION".equals(datasetAsset.getTaskType())
+                    || !"IMAGE_MASK_PAIRS".equals(datasetAsset.getDataFormat()))) {
+            throw new BusinessException("DATASET_INCOMPATIBLE", "语义分割验证需要已导入的 images/masks 数据集。");
+        }
         java.io.File datasetDir = new java.io.File(datasetAsset.getFilePath());
         if (!datasetDir.exists() || !datasetDir.isDirectory()) {
             throw new RuntimeException("数据集目录在服务器上不存在：" + datasetAsset.getFilePath());
+        }
+
+        if (weightsValidation != null
+                && "SEMANTIC_SEGMENTATION".equals(weightsValidation.trustedModelDefinition().path("taskType").asText())) {
+            pythonJobClient.checkSegmentationDataset(weightsValidation.trustedModelDefinition(),
+                    weightsValidation.runtimeProfileId(), datasetAsset.getFilePath());
         }
 
         // 仅在全部启动条件确认通过后替换临时历史结果，避免被拒绝的请求误清理结果。
@@ -653,9 +679,10 @@ public class WorkflowServiceImpl implements WorkflowService {
         request.setStandaloneValidationId(null);
         request.setModelPath(modelFilePath);
         request.setDatasetPath(datasetAsset.getFilePath());
-        request.setAlgorithmType(
-            workflow.getYoloVersion() != null ? workflow.getYoloVersion() : "YOLOv10"
-        );
+        request.setDatasetAssetId(datasetAsset.getId());
+        request.setAlgorithmType(weightsValidation != null
+                ? weightsValidation.trustedModelDefinition().path("version").asText()
+                : workflow.getYoloVersion() != null ? workflow.getYoloVersion() : "YOLOv10");
         request.setCallbackUrl(pythonIntegrationProperties.getJavaBaseUrl() + "/api/internal/python/jobs/callback");
         request.setCallbackSecret(pythonIntegrationProperties.getCallbackSecret());
         request.setValidationMode(validationMode);
@@ -681,6 +708,88 @@ public class WorkflowServiceImpl implements WorkflowService {
                 currentUser.getRoleCode(),
                 WorkflowStepTextCatalog.startPythonJobMessage(response.getData().getJobId())
         );
+    }
+
+    @Override
+    public void retryValidation(Long workflowId) {
+        SysUser currentUser = loginUserContext.getCurrentUser();
+        assertServer(currentUser);
+        Workflow workflow = getWorkflowById(workflowId);
+        if (!Objects.equals(workflow.getServerUserId(), currentUser.getId())) {
+            throw new BusinessException("VALIDATION_RETRY_FORBIDDEN", "只能重新验证分配给自己的工作流。");
+        }
+        boolean freshClaim = "FAILED".equals(workflow.getStatus());
+        boolean uncertainSubmission = "PREPARING".equals(workflow.getStatus())
+                && "重新验证任务提交待确认".equals(workflow.getCurrentStep());
+        if ((!freshClaim && !uncertainSubmission) || !StringUtils.hasText(workflow.getPythonJobId())) {
+            throw new BusinessException("VALIDATION_RETRY_NOT_READY", "当前验证任务尚未结束或不允许重新验证。");
+        }
+        if (!weightsValidationPreparationService.isV1Workflow(workflow)) {
+            throw new BusinessException("VALIDATION_RETRY_NOT_READY", "当前工作流不是 weights-only 验证工作流。");
+        }
+        WorkflowWeightsValidationPreparationService.PreparedValidation prepared =
+                weightsValidationPreparationService.prepare(workflow);
+        DatasetAsset dataset = datasetAssetMapper.selectOne(new LambdaQueryWrapper<DatasetAsset>()
+                .eq(DatasetAsset::getId, workflow.getServerDatasetAssetId())
+                .eq(DatasetAsset::getOwnerUserId, currentUser.getId())
+                .eq(DatasetAsset::getIsDeleted, 0).last("limit 1"));
+        if (dataset == null || !"READY".equals(dataset.getStatus())
+                || !Objects.equals(dataset.getFilePathValidated(), 1)
+                || !StringUtils.hasText(dataset.getFilePath())
+                || !Files.isDirectory(Paths.get(dataset.getFilePath()))) {
+            throw new BusinessException("DATASET_INCOMPATIBLE", "请先绑定可用的服务端验证数据集。");
+        }
+        if ("SEMANTIC_SEGMENTATION".equals(prepared.trustedModelDefinition().path("taskType").asText())) {
+            if (!"IMAGE_MASK_PAIRS".equals(dataset.getDataFormat())
+                    || !"FORMAL_ASSET".equals(dataset.getRecordMode())
+                    || !"OK".equals(dataset.getLastCheckStatus())) {
+                throw new BusinessException("DATASET_INCOMPATIBLE", "语义分割验证需要已登记的 images/masks 数据集。");
+            }
+            pythonJobClient.checkSegmentationDataset(prepared.trustedModelDefinition(),
+                    prepared.runtimeProfileId(), dataset.getFilePath());
+        }
+
+        String oldJobId = workflow.getPythonJobId();
+        String jobId = freshClaim ? UUID.randomUUID().toString().replace("-", "") : oldJobId;
+        PythonCreateJobRequest request = new PythonCreateJobRequest();
+        request.setJobId(jobId);
+        request.setJobType(PythonJobTypes.WORKFLOW_VALIDATION);
+        request.setWorkflowId(workflow.getId());
+        request.setModelPath(prepared.modelPath());
+        request.setDatasetPath(dataset.getFilePath());
+        request.setDatasetAssetId(dataset.getId());
+        request.setAlgorithmType(prepared.trustedModelDefinition().path("version").asText());
+        request.setCallbackUrl(pythonIntegrationProperties.getJavaBaseUrl() + "/api/internal/python/jobs/callback");
+        request.setCallbackSecret(pythonIntegrationProperties.getCallbackSecret());
+        request.setValidationMode(WorkflowWeightsValidationPreparationService.VALIDATION_MODE_V1);
+        request.setRuntimeProfileId(prepared.runtimeProfileId());
+        request.setTrustedModelDefinition(prepared.trustedModelDefinition());
+        request.setGlobalWeights(prepared.globalWeights());
+
+        int claimed = freshClaim
+                ? workflowMapper.claimValidationRetry(workflowId, oldJobId, jobId)
+                : workflowMapper.reclaimValidationSubmission(workflowId, jobId);
+        if (claimed != 1) {
+            throw new BusinessException("VALIDATION_RETRY_ALREADY_RUNNING", "重新验证已由另一请求启动，请刷新页面。");
+        }
+        if (freshClaim) {
+            try {
+                insertStep(workflowId, nextStepNo(workflowId), "VALIDATION_RETRY_CLAIMED",
+                        "重新验证", "FAILED", "PREPARING", currentUser.getId(), currentUser.getRoleCode(),
+                        "previousJobId=" + oldJobId + "; newJobId=" + jobId);
+            } catch (RuntimeException ex) {
+                log.warn("Validation retry audit step failed: workflowId={}, jobId={}", workflowId, jobId, ex);
+            }
+        }
+        try {
+            PythonCreateJobResponse response = pythonJobClient.createJob(request);
+            if (!Objects.equals(jobId, response.getData().getJobId())) {
+                throw new BusinessException("VALIDATION_RETRY_JOB_MISMATCH", "验证任务编号与服务端响应不一致。");
+            }
+        } catch (RuntimeException ex) {
+            workflowMapper.markValidationSubmissionUncertain(workflowId, jobId);
+            throw ex;
+        }
     }
 
     @Override
@@ -722,7 +831,7 @@ public class WorkflowServiceImpl implements WorkflowService {
 
         if (isTerminalStatus(oldStatus) && Objects.equals(oldStatus, newStatus)) {
             applyPythonPayload(workflow, request, false);
-            workflowMapper.updateById(workflow);
+            persistPythonCallbackIfCurrent(workflow, request.getJobId());
             logCallbackOutcome("Python callback terminal refresh", false, workflow, request, true, true,
                     oldStatus, oldProgress, "terminal_duplicate");
             return;
@@ -756,7 +865,7 @@ public class WorkflowServiceImpl implements WorkflowService {
                 return;
             }
             applyPythonPayload(workflow, request, false);
-            workflowMapper.updateById(workflow);
+            persistPythonCallbackIfCurrent(workflow, request.getJobId());
             logCallbackOutcome("Python callback idempotent refresh", false, workflow, request, true, true,
                     oldStatus, oldProgress, "same_status_refresh");
             return;
@@ -769,7 +878,7 @@ public class WorkflowServiceImpl implements WorkflowService {
                 "python-callback-" + newStatus
         );
         applyPythonPayload(workflow, request, true);
-        workflowMapper.updateById(workflow);
+        persistPythonCallbackIfCurrent(workflow, request.getJobId());
 
         insertStep(
                 workflow.getId(),
@@ -788,6 +897,15 @@ public class WorkflowServiceImpl implements WorkflowService {
 
         if ("COMPLETED".equals(workflow.getStatus())) {
             validationResultService.warmWorkflowResultCache(workflow.getId());
+        }
+    }
+
+    private void persistPythonCallbackIfCurrent(Workflow workflow, String jobId) {
+        int updated = workflowMapper.update(workflow, new LambdaUpdateWrapper<Workflow>()
+                .eq(Workflow::getId, workflow.getId())
+                .eq(Workflow::getPythonJobId, jobId));
+        if (updated != 1) {
+            throw new BusinessException("VALIDATION_CALLBACK_STALE", "验证任务已更新，旧任务回调已忽略。");
         }
     }
 
@@ -1071,11 +1189,16 @@ public class WorkflowServiceImpl implements WorkflowService {
             throw new RuntimeException("Only the assigned server can bind the validation dataset.");
         }
 
-        if (workflow.getPythonJobId() != null && !workflow.getPythonJobId().isBlank()) {
+        boolean failedValidationWithGlobal = "FAILED".equals(workflow.getStatus())
+                && "COMPLETED".equals(workflow.getFederatedStatus())
+                && workflow.getFederatedModelAssetId() != null
+                && weightsValidationPreparationService.isV1Workflow(workflow);
+        if (StringUtils.hasText(workflow.getPythonJobId()) && !failedValidationWithGlobal) {
             throw new RuntimeException("Python 任务已启动，不能再修改验证数据集");
         }
 
-        if (Arrays.asList("VALIDATING", "COMPLETED", "FAILED", "WITHDRAWN").contains(workflow.getStatus())) {
+        if (Arrays.asList("VALIDATING", "COMPLETED", "WITHDRAWN").contains(workflow.getStatus())
+                || "FAILED".equals(workflow.getStatus()) && !failedValidationWithGlobal) {
             throw new RuntimeException("当前状态不允许再绑定服务端数据集");
         }
 
@@ -1101,11 +1224,29 @@ public class WorkflowServiceImpl implements WorkflowService {
                     "所选数据集没有可用图片，请确认目录中包含 .jpg、.jpeg 或 .png 文件。"
             );
         }
+        if (weightsValidationPreparationService.isV1Workflow(workflow)
+                && "COMPLETED".equals(workflow.getFederatedStatus())) {
+            WorkflowWeightsValidationPreparationService.PreparedValidation prepared =
+                    weightsValidationPreparationService.prepare(workflow);
+            if ("SEMANTIC_SEGMENTATION".equals(prepared.trustedModelDefinition().path("taskType").asText())) {
+                if (!"IMAGE_MASK_PAIRS".equals(datasetAsset.getDataFormat())
+                        || !"SEMANTIC_SEGMENTATION".equals(datasetAsset.getTaskType())
+                        || !"FORMAL_ASSET".equals(datasetAsset.getRecordMode())
+                        || !"READY".equals(datasetAsset.getStatus())
+                        || !"OK".equals(datasetAsset.getLastCheckStatus())) {
+                    throw new BusinessException("DATASET_INCOMPATIBLE", "语义分割验证需要已检查通过的正式 images/masks 数据集。");
+                }
+                pythonJobClient.checkSegmentationDataset(prepared.trustedModelDefinition(),
+                        prepared.runtimeProfileId(), datasetAsset.getFilePath());
+            }
+        }
         log.info("bindServerDataset 数据集校验通过：datasetId={}，图片数={}，类型={}",
                 datasetAsset.getId(), datasetAsset.getImageCount(), datasetAsset.getDatasetType());
 
-        workflow.setServerDatasetAssetId(datasetAsset.getId());
-        workflowMapper.updateById(workflow);
+        if (workflowMapper.bindDatasetIfCurrent(workflow.getId(), datasetAsset.getId(),
+                workflow.getStatus(), workflow.getPythonJobId()) != 1) {
+            throw new BusinessException("DATASET_BIND_CONFLICT", "工作流状态已变化，请刷新后重新绑定数据集。");
+        }
 
         insertStep(
                 workflow.getId(),

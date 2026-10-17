@@ -90,6 +90,7 @@ async def create_job(http_request: Request, payload: CreateJobRequest = Body(...
         "jobType": payload.jobType,
         "workflowId": payload.workflowId,
         "standaloneValidationId": payload.standaloneValidationId,
+        "datasetAssetId": payload.datasetAssetId,
         "status": "ACCEPTED",
         "progress": 0,
         "message": "job accepted",

@@ -29,6 +29,7 @@ class CreateJobRequest(BaseModel):
     jobType: Literal["WORKFLOW_VALIDATION", "STANDALONE_VALIDATION"]
     workflowId: Optional[int] = None
     standaloneValidationId: Optional[int] = None
+    datasetAssetId: Optional[int] = None
     modelPath: str
     datasetPath: str
     algorithmType: str

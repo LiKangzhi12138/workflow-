@@ -8,17 +8,20 @@ import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.workflow.config.PythonIntegrationProperties;
 import com.workflow.dto.validation.ValidationResultClassVO;
+import com.workflow.dto.validation.SegmentationClassMetricVO;
 import com.workflow.dto.validation.ValidationResultPredictionVO;
 import com.workflow.dto.validation.ValidationResultSampleVO;
 import com.workflow.dto.validation.ValidationResultViewVO;
 import com.workflow.entity.DatasetAsset;
 import com.workflow.entity.ModelAsset;
+import com.workflow.entity.ModelDefinition;
 import com.workflow.entity.StandaloneValidation;
 import com.workflow.entity.SysUser;
 import com.workflow.entity.Workflow;
 import com.workflow.entity.WorkflowStep;
 import com.workflow.mapper.DatasetAssetMapper;
 import com.workflow.mapper.ModelAssetMapper;
+import com.workflow.mapper.ModelDefinitionMapper;
 import com.workflow.mapper.StandaloneValidationMapper;
 import com.workflow.mapper.SysUserMapper;
 import com.workflow.mapper.WorkflowMapper;
@@ -31,6 +34,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.StringUtils;
 
 import java.io.File;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -58,6 +62,7 @@ public class ValidationResultServiceImpl implements ValidationResultService {
     private final WorkflowMapper workflowMapper;
     private final WorkflowStepMapper workflowStepMapper;
     private final ModelAssetMapper modelAssetMapper;
+    private final ModelDefinitionMapper modelDefinitionMapper;
     private final DatasetAssetMapper datasetAssetMapper;
     private final SysUserMapper sysUserMapper;
     private final LoginUserContext loginUserContext;
@@ -103,6 +108,7 @@ public class ValidationResultServiceImpl implements ValidationResultService {
         view.setRecall(readDouble(metricsNode, resultMetricsNode, "recall"));
         view.setMap50(readDouble(metricsNode, resultMetricsNode, "map50", "mAP"));
         view.setMap50_95(readDouble(metricsNode, resultMetricsNode, "map50_95"));
+        setSegmentationMetrics(view, metricsNode, resultMetricsNode, resultRoot);
         view.setFallback(readBoolean(metricsNode, resultRoot, "fallback"));
         view.setFallbackReason(readText(metricsNode, resultRoot, "fallbackReason", "fallback_reason"));
         view.setQualityLabel(validation.getQualityLabel());
@@ -142,6 +148,8 @@ public class ValidationResultServiceImpl implements ValidationResultService {
         log.info("Loading workflow validation result view: workflowId={}, userId={}", workflowId, currentUser.getId());
 
         Workflow workflow = resolveReadableWorkflow(workflowId, currentUser);
+        ModelDefinition definition = workflow.getModelDefinitionId() == null ? null
+                : modelDefinitionMapper.selectById(workflow.getModelDefinitionId());
         ModelAsset modelAsset = workflow.getClientModelAssetId() == null ? null : modelAssetMapper.selectById(workflow.getClientModelAssetId());
         DatasetAsset datasetAsset = workflow.getServerDatasetAssetId() == null ? null : datasetAssetMapper.selectById(workflow.getServerDatasetAssetId());
         JsonNode resultRoot = loadResultFileNode(
@@ -161,9 +169,13 @@ public class ValidationResultServiceImpl implements ValidationResultService {
         view.setValidationMode(MODE_WORKFLOW);
         view.setWorkflowId(workflow.getId());
         view.setValidationCode(workflow.getWorkflowCode());
-        view.setModelName(resolveAssetName(modelAsset == null ? null : modelAsset.getAssetName(), modelAsset == null ? null : modelAsset.getFilePath()));
+        view.setModelName(definition != null && StringUtils.hasText(definition.getDisplayName())
+                ? definition.getDisplayName()
+                : resolveAssetName(modelAsset == null ? null : modelAsset.getAssetName(), modelAsset == null ? null : modelAsset.getFilePath()));
         view.setDatasetName(resolveAssetName(datasetAsset == null ? null : datasetAsset.getAssetName(), datasetAsset == null ? null : datasetAsset.getFilePath()));
-        view.setAlgorithmType(workflow.getYoloVersion());
+        view.setAlgorithmType(definition == null ? workflow.getYoloVersion() : definition.getModelFamily());
+        view.setModelDefinitionCode(definition == null ? null : definition.getCode());
+        view.setRuntimeProfileId(definition == null ? null : definition.getRuntimeProfileId());
         view.setStatus(workflow.getStatus());
         view.setProgress(workflow.getProgress());
         view.setPythonJobId(workflow.getPythonJobId());
@@ -174,6 +186,10 @@ public class ValidationResultServiceImpl implements ValidationResultService {
         view.setRecall(readDouble(metricsNode, resultMetricsNode, "recall"));
         view.setMap50(readDouble(metricsNode, resultMetricsNode, "map50", "mAP"));
         view.setMap50_95(readDouble(metricsNode, resultMetricsNode, "map50_95"));
+        setSegmentationMetrics(view, metricsNode, resultMetricsNode, resultRoot);
+        if (definition != null && StringUtils.hasText(definition.getTaskType())) {
+            view.setTaskType(definition.getTaskType());
+        }
         view.setFallback(readBoolean(metricsNode, resultRoot, "fallback"));
         view.setFallbackReason(readText(metricsNode, resultRoot, "fallbackReason", "fallback_reason"));
         view.setQualityLabel(null);
@@ -288,13 +304,17 @@ public class ValidationResultServiceImpl implements ValidationResultService {
     public Path getStandaloneSampleImagePath(Long validationId, int sampleIndex) {
         SysUser currentUser = loginUserContext.getCurrentUser();
         StandaloneValidation validation = resolveOwnedValidation(validationId, currentUser);
-        Path cachedPath = validationImageCacheService.resolveCachedSampleImage(
+        ValidationImageCacheService.CachedValidationImageManifest currentManifest =
+                validationImageCacheService.getCachedManifest(currentUser.getRoleCode(), currentUser.getId(),
+                        MODE_STANDALONE, validation.getId());
+        Path cachedPath = currentManifest != null && Objects.equals(currentManifest.getJobId(), validation.getPythonJobId())
+                ? validationImageCacheService.resolveCachedSampleImage(
                 currentUser.getRoleCode(),
                 currentUser.getId(),
                 MODE_STANDALONE,
                 validation.getId(),
                 sampleIndex
-        );
+        ) : null;
         if (cachedPath != null) {
             return cachedPath;
         }
@@ -318,13 +338,16 @@ public class ValidationResultServiceImpl implements ValidationResultService {
                 currentUser.getRoleCode(),
                 currentUser.getId()
         );
-        cachedPath = validationImageCacheService.resolveCachedSampleImage(
+        currentManifest = validationImageCacheService.getCachedManifest(currentUser.getRoleCode(),
+                currentUser.getId(), MODE_STANDALONE, validation.getId());
+        cachedPath = currentManifest != null && Objects.equals(currentManifest.getJobId(), validation.getPythonJobId())
+                ? validationImageCacheService.resolveCachedSampleImage(
                 currentUser.getRoleCode(),
                 currentUser.getId(),
                 MODE_STANDALONE,
                 validation.getId(),
                 sampleIndex
-        );
+        ) : null;
         if (cachedPath != null) {
             log.info(
                     "Resolved standalone validation sample image from cache: validationId={}, sampleIndex={}, cachePath={}",
@@ -341,13 +364,17 @@ public class ValidationResultServiceImpl implements ValidationResultService {
     public Path getWorkflowSampleImagePath(Long workflowId, int sampleIndex) {
         SysUser currentUser = loginUserContext.getCurrentUser();
         Workflow workflow = resolveReadableWorkflow(workflowId, currentUser);
-        Path cachedPath = validationImageCacheService.resolveCachedSampleImage(
+        ValidationImageCacheService.CachedValidationImageManifest currentManifest =
+                validationImageCacheService.getCachedManifest(currentUser.getRoleCode(), currentUser.getId(),
+                        MODE_WORKFLOW, workflow.getId());
+        Path cachedPath = currentManifest != null && Objects.equals(currentManifest.getJobId(), workflow.getPythonJobId())
+                ? validationImageCacheService.resolveCachedSampleImage(
                 currentUser.getRoleCode(),
                 currentUser.getId(),
                 MODE_WORKFLOW,
                 workflow.getId(),
                 sampleIndex
-        );
+        ) : null;
         if (cachedPath != null) {
             return cachedPath;
         }
@@ -372,13 +399,16 @@ public class ValidationResultServiceImpl implements ValidationResultService {
                 currentUser.getRoleCode(),
                 currentUser.getId()
         );
-        cachedPath = validationImageCacheService.resolveCachedSampleImage(
+        currentManifest = validationImageCacheService.getCachedManifest(currentUser.getRoleCode(),
+                currentUser.getId(), MODE_WORKFLOW, workflow.getId());
+        cachedPath = currentManifest != null && Objects.equals(currentManifest.getJobId(), workflow.getPythonJobId())
+                ? validationImageCacheService.resolveCachedSampleImage(
                 currentUser.getRoleCode(),
                 currentUser.getId(),
                 MODE_WORKFLOW,
                 workflow.getId(),
                 sampleIndex
-        );
+        ) : null;
         if (cachedPath != null) {
             log.info(
                     "Resolved workflow validation sample image from cache: workflowId={}, sampleIndex={}, cachePath={}",
@@ -389,6 +419,43 @@ public class ValidationResultServiceImpl implements ValidationResultService {
             return cachedPath;
         }
         return resolveSampleImagePath(resultRoot, sampleIndex, datasetRoot, MODE_WORKFLOW, workflow.getId());
+    }
+
+    @Override
+    public Path getWorkflowSampleArtifactPath(Long workflowId, int sampleIndex, String artifact) {
+        Workflow workflow = resolveReadableWorkflow(workflowId, loginUserContext.getCurrentUser());
+        if (sampleIndex < 0 || !"COMPLETED".equals(workflow.getStatus())) {
+            throw new RuntimeException("Validation sample is not available.");
+        }
+        JsonNode resultRoot = loadResultFileNode(workflow.getResultFilePath(), workflow.getPythonJobId(),
+                MODE_WORKFLOW, workflowId);
+        if (!StringUtils.hasText(workflow.getPythonJobId())
+                || !workflow.getPythonJobId().equals(resultRoot.path("jobId").asText(null))) {
+            throw new RuntimeException("Validation sample is not available.");
+        }
+        JsonNode samples = resultRoot.path("sampleResults");
+        if (!samples.isArray() || sampleIndex >= samples.size()) {
+            throw new RuntimeException("Validation sample is not available.");
+        }
+        DatasetAsset dataset = workflow.getServerDatasetAssetId() == null ? null
+                : datasetAssetMapper.selectById(workflow.getServerDatasetAssetId());
+        Path datasetRoot = normalizePath(dataset == null ? null : dataset.getFilePath());
+        JsonNode sample = samples.get(sampleIndex);
+        Path root;
+        Path candidate;
+        if ("source".equals(artifact)) {
+            root = datasetRoot;
+            candidate = resolveSampleArtifactPath(readText(sample, null, "imagePath", "image_path"), root);
+        } else if ("mask".equals(artifact)) {
+            root = resolvePythonSampleDirectory(workflow.getPythonJobId());
+            candidate = normalizePath(readText(sample, null, "predictionMaskPath", "prediction_mask_path"));
+        } else {
+            throw new RuntimeException("Validation sample is not available.");
+        }
+        if (!isSafeArtifactPath(candidate, root)) {
+            throw new RuntimeException("Validation sample is not available.");
+        }
+        return candidate;
     }
 
     private StandaloneValidation resolveOwnedValidation(Long validationId, SysUser currentUser) {
@@ -439,7 +506,13 @@ public class ValidationResultServiceImpl implements ValidationResultService {
 
         try {
             log.info("Reading validation result file: mode={}, ownerId={}, resultFilePath={}", mode, ownerId, resultFilePath);
-            return objectMapper.readTree(resultFilePath.toFile());
+            JsonNode result = objectMapper.readTree(resultFilePath.toFile());
+            String resultJobId = result.path("jobId").asText(null);
+            if (StringUtils.hasText(resultJobId) && !Objects.equals(resultJobId, pythonJobId)) {
+                log.warn("Validation result file belongs to a different job: mode={}, ownerId={}", mode, ownerId);
+                return MissingNode.getInstance();
+            }
+            return result;
         } catch (Exception ex) {
             log.error("Failed to parse validation result file: mode={}, ownerId={}, resultFilePath={}", mode, ownerId, resultFilePath, ex);
             return MissingNode.getInstance();
@@ -593,6 +666,38 @@ public class ValidationResultServiceImpl implements ValidationResultService {
         return StringUtils.hasText(value) ? value : "METRICS_ONLY";
     }
 
+    private void setSegmentationMetrics(ValidationResultViewVO view, JsonNode storedMetrics,
+                                        JsonNode fileMetrics, JsonNode resultRoot) {
+        String taskType = readText(storedMetrics, fileMetrics, "taskType");
+        if (!StringUtils.hasText(taskType)) {
+            taskType = resultRoot.path("taskType").asText("DETECTION");
+        }
+        view.setTaskType(taskType);
+        if (!"SEMANTIC_SEGMENTATION".equals(taskType)) {
+            return;
+        }
+        view.setMetricsMode(readText(storedMetrics, fileMetrics, "metricsMode"));
+        view.setMIoU(readDouble(storedMetrics, fileMetrics, "mIoU"));
+        view.setMAcc(readDouble(storedMetrics, fileMetrics, "mAcc"));
+        view.setAAcc(readDouble(storedMetrics, fileMetrics, "aAcc"));
+        JsonNode classes = findNode(storedMetrics, "perClass");
+        if (!classes.isArray()) {
+            classes = findNode(fileMetrics, "perClass");
+        }
+        List<SegmentationClassMetricVO> items = new ArrayList<>();
+        if (classes.isArray()) {
+            for (JsonNode node : classes) {
+                SegmentationClassMetricVO item = new SegmentationClassMetricVO();
+                item.setClassId(node.path("classId").asInt());
+                item.setClassName(node.path("className").asText());
+                item.setIou(readDouble(node, null, "iou"));
+                item.setAccuracy(readDouble(node, null, "accuracy"));
+                items.add(item);
+            }
+        }
+        view.setSegmentationPerClass(items);
+    }
+
     private List<ValidationResultClassVO> buildClassResults(JsonNode metricsNode, JsonNode resultMetricsNode) {
         JsonNode source = findNode(metricsNode, "perClassResults");
         if (source.isMissingNode()) {
@@ -630,6 +735,9 @@ public class ValidationResultServiceImpl implements ValidationResultService {
         List<ValidationResultSampleVO> sampleResults = new ArrayList<>();
         ValidationImageCacheService.CachedValidationImageManifest existingManifest =
                 validationImageCacheService.getCachedManifest(roleCode, userId, mode, ownerId);
+        if (existingManifest != null && !Objects.equals(existingManifest.getJobId(), pythonJobId)) {
+            existingManifest = null;
+        }
         if (resultRoot == null || resultRoot.isMissingNode()) {
             if (existingManifest != null) {
                 sampleResults.addAll(buildSampleResultsFromCacheManifest(existingManifest, mode, ownerId));
@@ -668,6 +776,18 @@ public class ValidationResultServiceImpl implements ValidationResultService {
             item.setIsAnnotated(annotatedImageAvailable);
             item.setAnnotatedImageAvailable(annotatedImageAvailable);
             item.setPredictions(buildPredictions(node.path("predictions")));
+            if (MODE_WORKFLOW.equals(mode)
+                    && StringUtils.hasText(pythonJobId)
+                    && pythonJobId.equals(resultRoot.path("jobId").asText(null))) {
+                Path sourcePath = resolveSampleArtifactPath(readText(node, null, "imagePath", "image_path"), datasetRoot);
+                if (isSafeArtifactPath(sourcePath, datasetRoot)) {
+                    item.setSourceImageUrl(buildSampleArtifactUrl(ownerId, index, "source"));
+                }
+                Path maskPath = normalizePath(readText(node, null, "predictionMaskPath", "prediction_mask_path"));
+                if (isSafeArtifactPath(maskPath, resolvePythonSampleDirectory(pythonJobId))) {
+                    item.setPredictionMaskUrl(buildSampleArtifactUrl(ownerId, index, "mask"));
+                }
+            }
             sampleResults.add(item);
 
             Path displayPath = resolveDisplaySamplePath(node, datasetRoot);
@@ -803,6 +923,7 @@ public class ValidationResultServiceImpl implements ValidationResultService {
                 userId,
                 mode,
                 ownerId,
+                pythonJobId,
                 effectiveSources
         );
     }
@@ -911,6 +1032,21 @@ public class ValidationResultServiceImpl implements ValidationResultService {
             return "/api/validation-results/standalone/" + ownerId + "/samples/" + sampleIndex + "/image";
         }
         return "/api/validation-results/workflows/" + ownerId + "/samples/" + sampleIndex + "/image";
+    }
+
+    private String buildSampleArtifactUrl(Long workflowId, int sampleIndex, String artifact) {
+        return "/api/validation-results/workflows/" + workflowId + "/samples/" + sampleIndex + "/" + artifact;
+    }
+
+    private boolean isSafeArtifactPath(Path candidate, Path root) {
+        if (candidate == null || root == null || !isImageFile(candidate)) {
+            return false;
+        }
+        try {
+            return Files.isRegularFile(candidate) && candidate.toRealPath().startsWith(root.toRealPath());
+        } catch (IOException ex) {
+            return false;
+        }
     }
 
     private void warmWorkflowResultCacheForOwner(Workflow workflow,

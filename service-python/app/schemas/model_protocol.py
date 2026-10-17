@@ -434,6 +434,19 @@ class RuntimeWeightsValidationRequest(StrictProtocolModel):
     algorithmType: str
 
 
+class RuntimeDatasetCheckRequest(StrictProtocolModel):
+    modelDefinition: ModelDefinition
+    runtimeProfileId: str
+    datasetPath: str
+
+
+class RuntimeDatasetCheckResult(StrictProtocolModel):
+    passed: bool
+    reasonCode: str
+    message: str
+    imageCount: int
+
+
 class RuntimeWeightsValidationResult(StrictProtocolModel):
     passed: bool
     reasonCode: str

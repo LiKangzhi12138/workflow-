@@ -5,7 +5,6 @@
         <div class="toolbar">
           <div class="title-wrap">
             <div class="page-title">服务器端管理工作流</div>
-            <div class="page-desc">本页只负责查看与跳转，真实流程推进请统一在工作流进度页完成。</div>
           </div>
 
           <div class="toolbar-actions">
@@ -225,6 +224,7 @@ import {
 } from '@/api/workflow'
 import { formatMechanismEnabled, getPrivacyStatusLabel } from '@/constants/workflowProgress'
 import { resolveValidPage } from '@/utils/pagination'
+import { isCurrentRequest } from '@/utils/workflowProgressState'
 import { getWorkflowModelDisplayName } from '@/utils/workflowModelDisplay'
 
 const router = useRouter()
@@ -239,6 +239,7 @@ const query = reactive({
   pageSize: 10,
   status: ''
 })
+let listRequestSequence = 0
 
 const statusOptions = [
   { label: '已创建', value: 'CREATED' },
@@ -304,13 +305,18 @@ function formatMetrics(metricsJson?: string) {
 }
 
 async function loadList() {
+  const requestSequence = ++listRequestSequence
+  const pageNum = query.pageNum
+  const pageSize = query.pageSize
+  const status = query.status || undefined
   loading.value = true
   try {
     const res = await listWorkflowsApi({
-      pageNum: query.pageNum,
-      pageSize: query.pageSize,
-      status: query.status || undefined
+      pageNum,
+      pageSize,
+      status
     })
+    if (!isCurrentRequest(requestSequence, listRequestSequence)) return
     const nextRecords = res.data?.records || []
     const nextTotal = Number(res.data?.total || 0)
     const validPage = resolveValidPage(query.pageNum, query.pageSize, nextTotal)
@@ -322,9 +328,10 @@ async function loadList() {
     }
     tableData.value = nextRecords
   } catch (error: any) {
+    if (!isCurrentRequest(requestSequence, listRequestSequence)) return
     ElMessage.error(error.message || '加载工作流列表失败')
   } finally {
-    loading.value = false
+    if (isCurrentRequest(requestSequence, listRequestSequence)) loading.value = false
   }
 }
 

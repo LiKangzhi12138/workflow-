@@ -5,7 +5,6 @@
         <div class="toolbar">
           <div class="title-wrap">
             <div class="page-title">客户端管理工作流</div>
-            <div class="page-desc">创建、查看、撤回自己的工作流，并通过进度页完成模型上传与状态跟踪</div>
           </div>
 
           <div class="toolbar-actions">
@@ -141,7 +140,7 @@
           </el-select>
         </el-form-item>
 
-        <el-form-item label="客户端模型" prop="clientModelAssetId">
+        <el-form-item v-if="modelSelectionMode === 'legacy'" label="客户端模型" prop="clientModelAssetId">
           <el-select
             v-model="createForm.clientModelAssetId"
             placeholder="请选择自己的模型"
@@ -515,6 +514,7 @@
       title="为工作流提交模型"
       width="720px"
       :close-on-click-modal="uploadStep === 0"
+      destroy-on-close
     >
       <!-- 模式切换 Tab -->
       <el-tabs v-if="false" v-model="uploadMode" style="margin-bottom: 8px">
@@ -633,7 +633,7 @@
             </template>
           </el-alert>
           <el-form label-position="top">
-            <el-form-item label="第一步：从模型管理中选择一个已有模型资产（可选）">
+            <el-form-item label="第一步：选择模型资产">
               <el-select
                 v-model="selectedModelAssetId"
                 placeholder="选择用于预填和关联的模型资产"
@@ -659,6 +659,8 @@
             :accept="uploadContract.uploadProtocol === 'WEIGHTS_V1' ? '.pt' : '.pt,.weights,.onnx'"
             :limit="1"
             :on-change="handleFileChange"
+            :on-remove="handleFileRemove"
+            :on-exceed="handleFileExceed"
           >
             <el-icon style="font-size: 40px; color: #409eff"><Upload /></el-icon>
             <div style="margin-top: 8px; font-size: 14px">
@@ -681,6 +683,9 @@
           </div>
           <div v-if="uploadError" style="margin-top: 8px">
             <el-alert type="error" :title="uploadError" show-icon :closable="false" />
+          </div>
+          <div v-if="!uploadPackageReady" class="upload-readiness" role="status">
+            <div v-for="reason in uploadReadiness.reasons" :key="reason.code">{{ reason.message }}</div>
           </div>
         </div>
 
@@ -821,6 +826,8 @@
             v-if="uploadStep === 0"
             type="primary"
             :disabled="!uploadPackageReady"
+            data-upload-readiness-version="2"
+            :data-upload-reasons="uploadReadiness.reasons.map((reason) => reason.code).join(',')"
             @click="startEncryptedUpload"
           >
             开始洗牌加密并上传
@@ -857,6 +864,12 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  isUploadableClientModelAsset,
+  resolveUploadableModelAsset,
+  resolveUploadModelAssetId
+} from '@/utils/workflowUploadSelection'
+import { evaluateUploadReadiness } from '@/utils/workflowUploadReadiness'
 import type { FormInstance, FormRules, TagProps } from 'element-plus'
 import { Upload } from '@element-plus/icons-vue'
 import {
@@ -901,10 +914,10 @@ import {
   type MinimalModelSelectionAnswers
 } from '@/utils/minimalModelSelection'
 import { resolveValidPage } from '@/utils/pagination'
+import { isCurrentRequest } from '@/utils/workflowProgressState'
 import { getWorkflowModelDisplayName } from '@/utils/workflowModelDisplay'
 import {
   appendWeightsProtocolMetadata,
-  protocolUploadReady,
   weightsUploadErrorMessage
 } from '@/utils/weightsPackageUpload'
 
@@ -923,6 +936,7 @@ const query = reactive({
   pageSize: 10,
   status: ''
 })
+let listRequestSequence = 0
 
 const statusOptions = [
   { label: '已创建', value: 'CREATED' },
@@ -1025,7 +1039,13 @@ const validateLegacyVersion = (_rule: unknown, value: unknown, callback: (error?
 const createRules: FormRules = {
   workflowName: [{ required: true, message: '请输入工作流名称', trigger: 'blur' }],
   serverUserId: [{ required: true, message: '请选择服务端用户', trigger: 'change' }],
-  clientModelAssetId: [{ required: true, message: '请选择客户端模型', trigger: 'change' }],
+  clientModelAssetId: [{
+    validator: (_rule, value, callback) => {
+      if (modelSelectionMode.value !== 'legacy' || Number(value) > 0) callback()
+      else callback(new Error('请选择客户端模型'))
+    },
+    trigger: 'change'
+  }],
   clientModelCount: [{ required: true, message: '请输入客户端模型数量', trigger: 'change' }],
   modelDefinitionId: [{ validator: validateDefinitionSelection, trigger: 'change' }],
   yoloVersion: [{ validator: validateLegacyVersion, trigger: 'change' }]
@@ -1163,13 +1183,18 @@ function resetCreateForm() {
 }
 
 async function loadList() {
+  const requestSequence = ++listRequestSequence
+  const pageNum = query.pageNum
+  const pageSize = query.pageSize
+  const status = query.status || undefined
   loading.value = true
   try {
     const res = await listWorkflowsApi({
-      pageNum: query.pageNum,
-      pageSize: query.pageSize,
-      status: query.status || undefined
+      pageNum,
+      pageSize,
+      status
     })
+    if (!isCurrentRequest(requestSequence, listRequestSequence)) return
 
     const pageData: any = res.data ?? res
     const nextRecords = pageData?.records ?? pageData?.rows ?? pageData?.list ?? []
@@ -1183,9 +1208,10 @@ async function loadList() {
     }
     tableData.value = nextRecords
   } catch (error: any) {
+    if (!isCurrentRequest(requestSequence, listRequestSequence)) return
     ElMessage.error(error.message || '加载工作流列表失败')
   } finally {
-    loading.value = false
+    if (isCurrentRequest(requestSequence, listRequestSequence)) loading.value = false
   }
 }
 
@@ -1255,7 +1281,8 @@ async function loadModelSelectionMode() {
 
 async function openCreateDialog() {
   createDialogVisible.value = true
-  await Promise.all([loadServerUsers(), loadModelOptions(), loadModelSelectionMode()])
+  await Promise.all([loadServerUsers(), loadModelSelectionMode()])
+  if (modelSelectionMode.value === 'legacy') await loadModelOptions()
 }
 
 async function submitCreate() {
@@ -1276,7 +1303,9 @@ async function submitCreate() {
     await createWorkflowApi({
       workflowName: createForm.workflowName,
       serverUserId: Number(createForm.serverUserId),
-      clientModelAssetId: Number(createForm.clientModelAssetId),
+      ...(modelSelectionMode.value === 'legacy'
+        ? { clientModelAssetId: Number(createForm.clientModelAssetId) }
+        : {}),
       clientModelCount: Number(createForm.clientModelCount),
       ...modelSelection,
       isPublic: createForm.isPublic,
@@ -1410,11 +1439,39 @@ const uploadContract = ref<WorkflowUploadContract>({
 })
 const uploadManifestFile = ref<File | null>(null)
 const uploadDescriptorFile = ref<File | null>(null)
-const uploadPackageReady = computed(() => protocolUploadReady(
-  uploadContract.value.uploadProtocol,
-  uploadFile.value,
-  { manifest: uploadManifestFile.value, descriptor: uploadDescriptorFile.value }
-))
+const uploadContractLoaded = ref(false)
+const uploadContractError = ref('')
+const uploadAssetsLoaded = ref(false)
+const uploadAssetLoadError = ref('')
+const uploadReadiness = computed(() => {
+  const workflow = currentUploadWorkflow.value
+  const required = requiredUploadCount(workflow)
+  const occupied = Number(workflow?.activeUploadCount || 0)
+  const remaining = replaceExistingMode.value && required === 1 && occupied > 0
+    ? 1 : Math.max(0, required - occupied)
+  return evaluateUploadReadiness({
+    workflowId: workflow?.id ?? null,
+    workflowStatus: workflow?.status ?? null,
+    progressAvailable: workflow != null,
+    requiredModelCount: required,
+    remainingSlots: remaining,
+    protocolLoaded: uploadContractLoaded.value,
+    contractWorkflowId: uploadContract.value.workflowId,
+    protocol: uploadContract.value.uploadProtocol,
+    protocolError: uploadContractError.value,
+    modelAssetId: selectedModelAssetId.value,
+    assetOptionsAvailable: uploadContract.value.uploadProtocol !== 'WEIGHTS_V1' || uploadAssetsLoaded.value,
+    assetOptionCount: myModelAssets.value.length,
+    selectedAssetAvailable: uploadContract.value.uploadProtocol !== 'WEIGHTS_V1' ||
+      Boolean(resolveUploadableModelAsset(myModelAssets.value, selectedModelAssetId.value)),
+    assetError: uploadAssetLoadError.value,
+    weightsFiles: uploadFile.value ? [uploadFile.value] : [],
+    manifest: uploadManifestFile.value,
+    descriptor: uploadDescriptorFile.value,
+    uploading: uploadStep.value > 0 && uploadStep.value < 5
+  })
+})
+const uploadPackageReady = computed(() => uploadReadiness.value.ready)
 
 // 本地模型资产相关
 const uploadMode = ref<'local' | 'file'>('local')
@@ -1436,6 +1493,7 @@ function resolveWorkflowUploadErrorMessage(stage: string, error: unknown) {
 const myModelAssets = ref<ModelAssetItem[]>([])
 const selectedModelAssetId = ref<number | null>(null)
 const bindingLocal = ref(false)
+let uploadDialogRequestSequence = 0
 
 watch(
   () => uploadStep.value,
@@ -1452,6 +1510,7 @@ watch(
 )
 
 const openUploadDialog = async (row: WorkflowListItem, replaceExisting: boolean = false) => {
+  const requestSequence = ++uploadDialogRequestSequence
   currentUploadWorkflow.value = row
   uploadDialogVisible.value = true
   uploadMode.value = 'file'
@@ -1464,24 +1523,41 @@ const openUploadDialog = async (row: WorkflowListItem, replaceExisting: boolean 
   uploadManifestFile.value = null
   uploadDescriptorFile.value = null
   selectedModelAssetId.value = row.clientModelAssetId ?? null
+  myModelAssets.value = []
+  uploadContractLoaded.value = false
+  uploadContractError.value = ''
+  uploadAssetsLoaded.value = false
+  uploadAssetLoadError.value = ''
   bindingLocal.value = false
 
   try {
     const response = await getWorkflowUploadContract(row.id)
+    if (requestSequence !== uploadDialogRequestSequence || currentUploadWorkflow.value?.id !== row.id || !uploadDialogVisible.value) return
     uploadContract.value = response.data
+    uploadContractLoaded.value = true
   } catch (error) {
-    uploadError.value = '无法读取当前工作流上传协议，请稍后重试。'
+    if (requestSequence !== uploadDialogRequestSequence || currentUploadWorkflow.value?.id !== row.id) return
+    uploadContractError.value = '无法读取当前工作流上传协议，请稍后重试。'
+    uploadError.value = uploadContractError.value
     return
   }
 
-  // 加载当前用户的模型资产列表（file_path_validated = 1 的）
+  // The upload API also accepts the current user's client path-registry assets.
   try {
     const list = await listAllModelAssetsApi()
-    myModelAssets.value = list.filter(
-      (model: any) => model.filePathValidated === 1 || model.file_path_validated === 1
-    )
+    if (requestSequence !== uploadDialogRequestSequence || currentUploadWorkflow.value?.id !== row.id || !uploadDialogVisible.value) return
+    myModelAssets.value = list.filter(isUploadableClientModelAsset)
+    uploadAssetsLoaded.value = true
+    if (uploadContract.value.uploadProtocol === 'WEIGHTS_V1' &&
+        !resolveUploadableModelAsset(myModelAssets.value, selectedModelAssetId.value)) {
+      selectedModelAssetId.value = null
+    }
   } catch (e) {
+    if (requestSequence !== uploadDialogRequestSequence || currentUploadWorkflow.value?.id !== row.id) return
     myModelAssets.value = []
+    if (uploadContract.value.uploadProtocol === 'WEIGHTS_V1') selectedModelAssetId.value = null
+    uploadAssetLoadError.value = '无法加载可用模型资产，请稍后重试。'
+    uploadError.value = uploadAssetLoadError.value
   }
 }
 
@@ -1515,6 +1591,14 @@ const handleBindLocalModel = async () => {
 
 const handleFileChange = (uploadFileObj: any) => {
   uploadFile.value = uploadFileObj.raw
+}
+
+const handleFileRemove = () => {
+  uploadFile.value = null
+}
+
+const handleFileExceed = () => {
+  ElMessage.warning('每次上传一个模型文件，请先移除已选文件。')
 }
 
 const handleManifestFileChange = (event: Event) => {
@@ -1643,11 +1727,22 @@ const legacyStartEncryptedUpload = async () => {
 }
 
 const startEncryptedUpload = async () => {
-  if (!uploadFile.value || !currentUploadWorkflow.value) return
+  if (uploadStep.value > 0) return
+  if (!uploadPackageReady.value || !uploadFile.value || !currentUploadWorkflow.value) {
+    uploadError.value = uploadReadiness.value.reasons.map((reason) => reason.message).join('；')
+    return
+  }
 
   const file = uploadFile.value
   const workflow = currentUploadWorkflow.value
-  const modelAssetId = selectedModelAssetId.value ?? workflow.clientModelAssetId
+  const resolvedAssetId = resolveUploadModelAssetId(
+    uploadContract.value.uploadProtocol,
+    selectedModelAssetId.value,
+    workflow.clientModelAssetId
+  )
+  const modelAssetId = uploadContract.value.uploadProtocol === 'WEIGHTS_V1'
+    ? resolveUploadableModelAsset(myModelAssets.value, resolvedAssetId)?.id ?? null
+    : resolvedAssetId
   uploadError.value = ''
   console.info('[workflow-upload] start', {
     workflowId: workflow.id,
@@ -1809,7 +1904,7 @@ onMounted(async () => {
   const registryModelId = Number(route.query.registryModelId || 0)
   if (registryModelId) {
     await openCreateDialog()
-    createForm.clientModelAssetId = registryModelId
+    if (modelSelectionMode.value === 'legacy') createForm.clientModelAssetId = registryModelId
   }
 })
 </script>
@@ -1878,6 +1973,13 @@ onMounted(async () => {
   color: #606266;
   line-height: 1.8;
   overflow-wrap: anywhere;
+}
+
+.upload-readiness {
+  margin-top: 12px;
+  color: #9a6700;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .workflow-detail-descriptions :deep(.el-descriptions__content) {

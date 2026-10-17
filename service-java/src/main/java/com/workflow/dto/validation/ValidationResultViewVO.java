@@ -22,6 +22,10 @@ public class ValidationResultViewVO {
 
     private String algorithmType;
 
+    private String modelDefinitionCode;
+
+    private String runtimeProfileId;
+
     private String status;
 
     private Integer progress;
@@ -41,6 +45,18 @@ public class ValidationResultViewVO {
     private Double map50;
 
     private Double map50_95;
+
+    private String taskType;
+
+    private String metricsMode;
+
+    private Double mIoU;
+
+    private Double mAcc;
+
+    private Double aAcc;
+
+    private List<SegmentationClassMetricVO> segmentationPerClass;
 
     private Boolean fallback;
 

@@ -7,7 +7,6 @@
             <div class="card-header">
               <div>
                 <div class="card-title">{{ WORKFLOW_PROGRESS_TEXT.latestWorkflows }}</div>
-                <div class="card-desc">{{ WORKFLOW_PROGRESS_TEXT.latestWorkflowsDescClient }}</div>
               </div>
               <el-button text @click="initializePage">
                 {{ WORKFLOW_PROGRESS_TEXT.refresh }}
@@ -39,6 +38,20 @@
             </template>
             <el-empty v-else :description="WORKFLOW_PROGRESS_TEXT.emptyClient" />
           </div>
+          <div v-if="workflowListTotal > 0" class="workflow-sidebar-pagination">
+            <span>共 {{ workflowListTotal }} 条</span>
+            <el-pagination
+              small
+              background
+              layout="prev, pager, next, sizes"
+              :total="workflowListTotal"
+              :current-page="workflowListPage"
+              :page-size="workflowListPageSize"
+              :page-sizes="[10, 20, 50]"
+              @current-change="handleWorkflowPageChange"
+              @size-change="handleWorkflowPageSizeChange"
+            />
+          </div>
         </el-card>
       </el-col>
 
@@ -48,7 +61,6 @@
             <div class="card-header">
               <div>
                 <div class="card-title">{{ WORKFLOW_PROGRESS_TEXT.clientPageTitle }}</div>
-                <div class="card-desc">{{ WORKFLOW_PROGRESS_TEXT.clientVisualDesc }}</div>
               </div>
             </div>
           </template>
@@ -171,10 +183,26 @@
                   style="margin-bottom: 16px"
                 />
 
+                <el-select
+                  v-if="uploadContractLoaded && ['CREATED', 'ACCEPTED'].includes(workflowDetail.status)"
+                  v-model="selectedUploadModelAssetId"
+                  placeholder="选择上传关联的模型资产"
+                  no-data-text="暂无可用于上传的模型资产，请先到模型管理登记或校验"
+                  style="width: 100%; margin-bottom: 16px"
+                  filterable
+                >
+                  <el-option
+                    v-for="asset in uploadAssetOptions"
+                    :key="asset.id"
+                    :label="asset.assetName"
+                    :value="asset.id"
+                  />
+                </el-select>
+
                 <el-upload
                   ref="uploadRef"
                   drag
-                  multiple
+                  :multiple="uploadContract.uploadProtocol !== 'WEIGHTS_V1'"
                   :auto-upload="false"
                   :accept="uploadContract.uploadProtocol === 'WEIGHTS_V1' ? '.pt' : '.pt,.weights,.onnx'"
                   :show-file-list="false"
@@ -211,11 +239,16 @@
                       type="primary"
                       :loading="uploadSubmitting"
                       :disabled="!canStartClientUpload"
+                      data-upload-readiness-version="2"
+                      :data-upload-reasons="uploadReadiness.reasons.map((reason) => reason.code).join(',')"
                       @click="startWorkflowUpload"
                     >
                       {{ uploadActionLabel }}
                     </el-button>
                   </div>
+                </div>
+                <div v-if="!canStartClientUpload" class="upload-readiness" role="status">
+                  <div v-for="reason in uploadReadiness.reasons" :key="reason.code">{{ reason.message }}</div>
                 </div>
 
                 <el-table
@@ -467,15 +500,23 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import {
+  isUploadableClientModelAsset,
+  resolveUploadableModelAsset,
+  resolveUploadModelAssetId,
+  stageUploadFiles
+} from '@/utils/workflowUploadSelection'
+import { evaluateUploadReadiness } from '@/utils/workflowUploadReadiness'
 import type { TagProps } from 'element-plus'
 import { getWorkflowModelDisplayName } from '@/utils/workflowModelDisplay'
+import { listAllModelAssetsApi, type ModelAssetItem } from '@/api/model'
 import {
   deleteSavedWorkflowResultApi,
   getWorkflowDetailApi,
   getWorkflowUploadProgress,
   getWorkflowUploadContract,
   initModelUpload,
-  listAllWorkflowsApi,
+  listWorkflowsApi,
   saveWorkflowResultApi,
   uploadEncryptedModelFile,
   type UploadProgressVO,
@@ -497,13 +538,18 @@ import {
   getServerProcessDescription,
   getServerProcessTitle,
   getWorkflowStatusLabel,
-  resolveServerProcessPhase,
-  sortWorkflowsByLatest
+  resolveServerProcessPhase
 } from '@/constants/workflowProgress'
 import { summarizeUiErrorMessage } from '@/utils/errorMessage'
+import { resolveValidPage } from '@/utils/pagination'
+import {
+  isCurrentRequest,
+  resolveProgressWorkflowTarget,
+  resolveUploadProtocolReadError,
+  shouldRequestUploadProtocol
+} from '@/utils/workflowProgressState'
 import {
   appendWeightsProtocolMetadata,
-  protocolUploadReady,
   weightsUploadErrorMessage
 } from '@/utils/weightsPackageUpload'
 
@@ -541,6 +587,9 @@ const router = useRouter()
 const listLoading = ref(false)
 const detailLoading = ref(false)
 const workflowList = ref<WorkflowListItem[]>([])
+const workflowListTotal = ref(0)
+const workflowListPage = ref(1)
+const workflowListPageSize = ref(10)
 const activeWorkflowId = ref<number | null>(null)
 const workflowDetail = ref<WorkflowDetail | null>(null)
 const uploadProgress = ref<UploadProgressVO | null>(null)
@@ -553,6 +602,7 @@ const uploadSubmitting = ref(false)
 const uploadUiStep = ref(0)
 const uploadTransferProgress = ref(0)
 const uploadError = ref('')
+const uploadProtocolError = ref('')
 const fileSha256Preview = ref('')
 const uploadDialogVisible = ref(false)
 const uploadContract = ref<WorkflowUploadContract>({
@@ -563,9 +613,15 @@ const uploadContract = ref<WorkflowUploadContract>({
   acceptedArtifactType: 'FULL_CHECKPOINT'
 })
 const uploadContractLoaded = ref(false)
+const uploadProgressError = ref('')
+const uploadAssetsLoaded = ref(false)
+const uploadAssetLoadError = ref('')
 const uploadManifestFile = ref<File | null>(null)
 const uploadDescriptorFile = ref<File | null>(null)
 let pollingTimer: number | null = null
+let listRequestSequence = 0
+let detailRequestSequence = 0
+let uploadAssetRequestSequence = 0
 
 const routeWorkflowId = computed(() => {
   const id = route.query.id || route.params.id
@@ -580,9 +636,13 @@ const selectedWorkflowItem = computed(() => {
 
 const resolvedWorkflowId = computed(() => workflowDetail.value?.id || activeWorkflowId.value || null)
 
-const resolvedClientModelAssetId = computed(
-  () => workflowDetail.value?.clientModelAssetId || selectedWorkflowItem.value?.clientModelAssetId || null
-)
+const uploadAssetOptions = ref<ModelAssetItem[]>([])
+const selectedUploadModelAssetId = ref<number | null>(null)
+const resolvedClientModelAssetId = computed(() => resolveUploadModelAssetId(
+  uploadContract.value.uploadProtocol,
+  selectedUploadModelAssetId.value,
+  workflowDetail.value?.clientModelAssetId ?? selectedWorkflowItem.value?.clientModelAssetId
+))
 
 const requiredModelCount = computed(() => {
   const count = Number(
@@ -622,51 +682,38 @@ const currentUploadingFileName = computed(() => currentUploadingFile.value?.name
 const completedLocalUploadCount = computed(
   () => selectedUploadFiles.value.filter((item) => item.status === 'completed').length
 )
-const hasExistingUpload = computed(() => {
-  const progress = uploadProgress.value
-  if (!progress) return false
-  return Boolean(
-    progress.activeUploadCount ||
-      progress.receivedModelCount ||
-      progress.collectedModelCount ||
-      progress.latestUploadStatus
-  )
-})
 const shouldReplaceExistingUpload = computed(
-  () => requiredModelCount.value === 1 && hasExistingUpload.value
+  () => requiredModelCount.value === 1 && uploadProgress.value?.replaceAllowed === true
 )
 const remainingUploadSlots = computed(() => {
-  if (requiredModelCount.value <= 1) {
-    return shouldReplaceExistingUpload.value ? 1 : Math.max(0, requiredModelCount.value - uploadRecords.value.length)
-  }
-  const occupied = uploadProgress.value?.activeUploadCount ?? uploadRecords.value.length
+  if (!uploadProgress.value) return 0
+  if (shouldReplaceExistingUpload.value) return 1
+  const occupied = uploadProgress.value.activeUploadCount
   return Math.max(0, requiredModelCount.value - occupied)
 })
-const canStartClientUpload = computed(() => {
-  if (!uploadContractLoaded.value) {
-    return false
-  }
-  if (!workflowDetail.value || !resolvedWorkflowId.value || selectedUploadFiles.value.length === 0) {
-    return false
-  }
-  if (!['CREATED', 'ACCEPTED'].includes(workflowDetail.value.status)) {
-    return false
-  }
-  if (!resolvedClientModelAssetId.value) {
-    return false
-  }
-  if (!selectedUploadFiles.value.every((item) => protocolUploadReady(
-    uploadContract.value.uploadProtocol,
-    item.raw,
-    { manifest: uploadManifestFile.value, descriptor: uploadDescriptorFile.value }
-  ))) {
-    return false
-  }
-  if (requiredModelCount.value <= 1) {
-    return selectedUploadFiles.value.length === 1
-  }
-  return remainingUploadSlots.value > 0
-})
+const uploadReadiness = computed(() => evaluateUploadReadiness({
+  workflowId: workflowDetail.value?.id === activeWorkflowId.value ? resolvedWorkflowId.value : null,
+  workflowStatus: workflowDetail.value?.status ?? null,
+  progressAvailable: uploadProgress.value?.workflowId === resolvedWorkflowId.value,
+  progressError: uploadProgressError.value,
+  requiredModelCount: requiredModelCount.value,
+  remainingSlots: remainingUploadSlots.value,
+  protocolLoaded: uploadContractLoaded.value,
+  contractWorkflowId: uploadContract.value.workflowId,
+  protocol: uploadContract.value.uploadProtocol,
+  protocolError: uploadProtocolError.value,
+  modelAssetId: resolvedClientModelAssetId.value,
+  assetOptionsAvailable: uploadContract.value.uploadProtocol !== 'WEIGHTS_V1' || uploadAssetsLoaded.value,
+  assetOptionCount: uploadAssetOptions.value.length,
+  selectedAssetAvailable: uploadContract.value.uploadProtocol !== 'WEIGHTS_V1' ||
+    Boolean(resolveUploadableModelAsset(uploadAssetOptions.value, resolvedClientModelAssetId.value)),
+  assetError: uploadAssetLoadError.value,
+  weightsFiles: selectedUploadFiles.value.map((item) => item.raw),
+  manifest: uploadManifestFile.value,
+  descriptor: uploadDescriptorFile.value,
+  uploading: uploadSubmitting.value
+}))
+const canStartClientUpload = computed(() => uploadReadiness.value.ready)
 const uploadDialogCanClose = computed(() => !uploadSubmitting.value)
 const uploadActionLabel = computed(() =>
   shouldReplaceExistingUpload.value ? '替换上传' : '开始上传'
@@ -680,15 +727,16 @@ const federatedModelUnavailable = computed(
   () => workflowDetail.value?.federatedStatus === 'COMPLETED' && workflowDetail.value?.federatedModelAvailable !== true
 )
 const uploadPanelSummaryType = computed(() => {
-  if (uploadError.value) return 'error'
+  if (uploadPanelError.value) return 'error'
   if (federatedModelUnavailable.value) return 'warning'
   if (['ready', 'dataset', 'validation', 'completed'].includes(serverProcessPhase.value)) return 'success'
   return 'info'
 })
+const uploadPanelError = computed(() => uploadError.value || uploadProtocolError.value)
 const serverProcessPhase = computed(() => resolveServerProcessPhase(workflowDetail.value, uploadProgress.value))
 const serverProcessingPhases = ['accepted', 'downloading', 'decrypting', 'registering', 'secure-shuffle', 'dp', 'secure-aggregation', 'federated']
 const uploadPanelSummaryTitle = computed(() => {
-  if (uploadError.value) return '上传链路出现异常'
+  if (uploadPanelError.value) return '上传暂不可用'
   if (federatedModelUnavailable.value) return '联邦聚合已完成，但全局模型当前不可用'
   if (serverProcessPhase.value === 'waiting-federated') return getServerProcessTitle('waiting-federated')
   if (['ready', 'dataset', 'validation', 'completed'].includes(serverProcessPhase.value)) return '当前工作流已完成联邦聚合，可继续进入验证流程'
@@ -698,7 +746,7 @@ const uploadPanelSummaryTitle = computed(() => {
   return '当前工作流可继续上传模型'
 })
 const uploadPanelSummaryDescription = computed(() => {
-  if (uploadError.value) return uploadError.value
+  if (uploadPanelError.value) return uploadPanelError.value
   if (federatedModelUnavailable.value) {
     return workflowDetail.value?.federatedModelUnavailableReason || '联邦全局模型不可用，无法再次启动验证。'
   }
@@ -923,6 +971,7 @@ function resetUploadUi() {
   uploadUiStep.value = 0
   uploadTransferProgress.value = 0
   uploadError.value = ''
+  uploadProtocolError.value = ''
   fileSha256Preview.value = ''
   uploadDialogVisible.value = false
   uploadRef.value?.clearFiles?.()
@@ -967,38 +1016,73 @@ function updateLocalUploadFileStatus(
 }
 
 async function loadWorkflowList() {
+  const requestSequence = ++listRequestSequence
   listLoading.value = true
   try {
-    const records = await listAllWorkflowsApi()
-    workflowList.value = sortWorkflowsByLatest(records)
+    const response = await listWorkflowsApi({
+      pageNum: workflowListPage.value,
+      pageSize: workflowListPageSize.value
+    })
+    if (!isCurrentRequest(requestSequence, listRequestSequence)) return
+    const page = response.data
+    const validPage = resolveValidPage(workflowListPage.value, workflowListPageSize.value, page.total)
+    workflowListTotal.value = page.total
+    if (validPage !== workflowListPage.value) {
+      workflowListPage.value = validPage
+      await loadWorkflowList()
+      return
+    }
+    workflowList.value = page.records || []
     console.info('[client-workflow-progress] latest workflow list loaded', {
       workflowIds: workflowList.value.map((item) => item.id),
-      total: workflowList.value.length
+      total: workflowListTotal.value,
+      page: workflowListPage.value,
+      pageSize: workflowListPageSize.value
     })
   } catch (error: any) {
+    if (!isCurrentRequest(requestSequence, listRequestSequence)) return
     ElMessage.error(error?.message || '加载工作流列表失败')
     workflowList.value = []
   } finally {
-    listLoading.value = false
+    if (isCurrentRequest(requestSequence, listRequestSequence)) listLoading.value = false
   }
 }
 
 async function loadWorkflowDetail(targetWorkflowId: number) {
+  const requestSequence = ++detailRequestSequence
   detailLoading.value = true
-  uploadContractLoaded.value = false
   try {
-    const [detailRes, uploadRes, contractRes] = await Promise.all([
+    const [detailRes, uploadResult] = await Promise.all([
       getWorkflowDetailApi(targetWorkflowId),
-      getWorkflowUploadProgress(targetWorkflowId).catch(() => null),
-      getWorkflowUploadContract(targetWorkflowId).catch(() => null)
+      getWorkflowUploadProgress(targetWorkflowId)
+        .then((response) => ({ response, error: '' }))
+        .catch(() => ({ response: null, error: '无法读取上传名额，请刷新后重试。' }))
     ])
+    if (!isCurrentRequest(requestSequence, detailRequestSequence) || activeWorkflowId.value !== targetWorkflowId) return
     workflowDetail.value = detailRes.data
-    uploadProgress.value = uploadRes?.data ?? null
-    if (contractRes?.data) {
-      uploadContract.value = contractRes.data
-      uploadContractLoaded.value = true
+    uploadProgress.value = uploadResult.response?.data ?? null
+    uploadProgressError.value = uploadResult.error
+
+    if (shouldRequestUploadProtocol(workflowDetail.value.status, uploadProgress.value, workflowDetail.value)) {
+      if ((!uploadContractLoaded.value || uploadContract.value.workflowId !== targetWorkflowId) && !uploadProtocolError.value) {
+        try {
+          const contractRes = await getWorkflowUploadContract(targetWorkflowId)
+          if (!isCurrentRequest(requestSequence, detailRequestSequence) || activeWorkflowId.value !== targetWorkflowId) return
+          uploadContract.value = contractRes.data
+          uploadContractLoaded.value = true
+          uploadProtocolError.value = ''
+        } catch (error: any) {
+          if (!isCurrentRequest(requestSequence, detailRequestSequence) || activeWorkflowId.value !== targetWorkflowId) return
+          uploadProtocolError.value = resolveUploadProtocolReadError(
+            Number(error?.response?.status) || undefined,
+            error?.response?.data?.code,
+            error?.message
+          )
+          uploadContractLoaded.value = false
+        }
+      }
     } else {
-      uploadError.value = '无法读取当前工作流上传协议，上传功能已暂时停用。'
+      uploadProtocolError.value = ''
     }
     console.info('[client-workflow-progress] workflow detail synced from backend', {
       workflowId: targetWorkflowId,
@@ -1010,12 +1094,24 @@ async function loadWorkflowDetail(targetWorkflowId: number) {
       persistentLocalCacheActive: false
     })
   } catch (error: any) {
+    if (!isCurrentRequest(requestSequence, detailRequestSequence) || activeWorkflowId.value !== targetWorkflowId) return
     ElMessage.error(error?.message || '加载工作流详情失败')
     workflowDetail.value = null
     uploadProgress.value = null
   } finally {
-    detailLoading.value = false
+    if (isCurrentRequest(requestSequence, detailRequestSequence)) detailLoading.value = false
   }
+}
+
+async function handleWorkflowPageChange(page: number) {
+  workflowListPage.value = page
+  await loadWorkflowList()
+}
+
+async function handleWorkflowPageSizeChange(size: number) {
+  workflowListPageSize.value = size
+  workflowListPage.value = 1
+  await loadWorkflowList()
 }
 
 async function handleSaveWorkflowResult() {
@@ -1059,7 +1155,26 @@ async function handleDeleteSavedWorkflowResult() {
 
 async function selectWorkflow(targetWorkflowId: number, syncRoute = false) {
   if (!targetWorkflowId) return
+  const assetRequestSequence = ++uploadAssetRequestSequence
+  const workflowChanged = activeWorkflowId.value !== targetWorkflowId
   activeWorkflowId.value = targetWorkflowId
+  if (workflowChanged) {
+    selectedUploadModelAssetId.value = null
+    uploadAssetOptions.value = []
+    workflowDetail.value = null
+    uploadProgress.value = null
+    uploadContract.value = {
+      workflowId: 0,
+      uploadProtocol: 'LEGACY_CHECKPOINT',
+      manifestRequired: false,
+      descriptorRequired: false,
+      acceptedArtifactType: 'FULL_CHECKPOINT'
+    }
+    uploadContractLoaded.value = false
+    uploadProgressError.value = ''
+  }
+  uploadAssetsLoaded.value = false
+  uploadAssetLoadError.value = ''
   resetUploadUi()
   if (syncRoute) {
     await router.replace({
@@ -1068,6 +1183,27 @@ async function selectWorkflow(targetWorkflowId: number, syncRoute = false) {
     })
   }
   await loadWorkflowDetail(targetWorkflowId)
+  if (activeWorkflowId.value === targetWorkflowId && uploadContractLoaded.value &&
+      ['CREATED', 'ACCEPTED'].includes(workflowDetail.value?.status || '')) {
+    try {
+      const assets = await listAllModelAssetsApi()
+      if (activeWorkflowId.value === targetWorkflowId && isCurrentRequest(assetRequestSequence, uploadAssetRequestSequence)) {
+        uploadAssetOptions.value = assets.filter(isUploadableClientModelAsset)
+        uploadAssetsLoaded.value = true
+        uploadAssetLoadError.value = ''
+        const boundId = workflowDetail.value?.clientModelAssetId
+        const boundAsset = resolveUploadableModelAsset(uploadAssetOptions.value, boundId)
+        if (selectedUploadModelAssetId.value == null && boundAsset) {
+          selectedUploadModelAssetId.value = boundAsset.id
+        }
+      }
+    } catch (error: any) {
+      if (activeWorkflowId.value === targetWorkflowId && isCurrentRequest(assetRequestSequence, uploadAssetRequestSequence)) {
+        uploadAssetLoadError.value = '无法加载当前账号的可用模型资产，请刷新后重试。'
+        ElMessage.error(uploadAssetLoadError.value)
+      }
+    }
+  }
 }
 
 async function refreshCurrentWorkflow(
@@ -1076,10 +1212,7 @@ async function refreshCurrentWorkflow(
 ) {
   const preserveUploadUi = options.preserveUploadUi === true
   await loadWorkflowList()
-  const nextWorkflowId =
-    targetWorkflowId && workflowList.value.some((item) => item.id === targetWorkflowId)
-      ? targetWorkflowId
-      : workflowList.value[0]?.id || null
+  const nextWorkflowId = resolveProgressWorkflowTarget(targetWorkflowId, activeWorkflowId.value, workflowList.value[0]?.id)
 
   if (!nextWorkflowId) {
     activeWorkflowId.value = null
@@ -1106,7 +1239,7 @@ async function refreshCurrentWorkflow(
 
 async function initializePage() {
   await loadWorkflowList()
-  if (!workflowList.value.length) {
+  if (!workflowList.value.length && !routeWorkflowId.value) {
     activeWorkflowId.value = null
     workflowDetail.value = null
     uploadProgress.value = null
@@ -1116,16 +1249,13 @@ async function initializePage() {
   }
 
   if (routeWorkflowId.value && !workflowList.value.some((item) => item.id === routeWorkflowId.value)) {
-    console.warn('[client-workflow-progress] route workflow id is not visible, fallback to latest workflow', {
+    console.info('[client-workflow-progress] loading routed workflow outside current list page', {
       routeWorkflowId: routeWorkflowId.value,
       availableWorkflowIds: workflowList.value.map((item) => item.id)
     })
   }
 
-  const targetWorkflowId =
-    routeWorkflowId.value && workflowList.value.some((item) => item.id === routeWorkflowId.value)
-      ? routeWorkflowId.value
-      : workflowList.value[0]?.id || null
+  const targetWorkflowId = resolveProgressWorkflowTarget(routeWorkflowId.value, activeWorkflowId.value, workflowList.value[0]?.id)
   if (!targetWorkflowId) return
 
   if (!routeWorkflowId.value || routeWorkflowId.value !== targetWorkflowId) {
@@ -1146,10 +1276,7 @@ function handleUploadFileChange(_uploadFileObj: any, uploadFiles: any[]) {
   const limit = uploadContract.value.uploadProtocol === 'WEIGHTS_V1'
     ? 1
     : requiredModelCount.value <= 1 ? 1 : Math.max(0, remainingUploadSlots.value)
-  const nextFiles = uploadFiles
-    .map((item) => item?.raw as File | undefined)
-    .filter((item): item is File => Boolean(item))
-    .slice(0, limit)
+  const nextFiles = stageUploadFiles(uploadFiles, limit, () => uploadRef.value?.clearFiles?.())
     .map((file) => ({
       uid: `${file.name}-${file.size}-${file.lastModified}`,
       name: file.name,
@@ -1160,7 +1287,6 @@ function handleUploadFileChange(_uploadFileObj: any, uploadFiles: any[]) {
     }))
 
   selectedUploadFiles.value = nextFiles
-  uploadRef.value?.clearFiles?.()
   console.info('[client-workflow-progress] upload files selected', {
     workflowId: activeWorkflowId.value,
     filenames: nextFiles.map((item) => item.name),
@@ -1185,7 +1311,9 @@ function handleUploadFileRemove() {
 async function legacyStartWorkflowUpload() {
   const workflowId = resolvedWorkflowId.value
   const workflow = workflowDetail.value
-  const modelAssetId = resolvedClientModelAssetId.value
+  const modelAssetId = uploadContract.value.uploadProtocol === 'WEIGHTS_V1'
+    ? resolveUploadableModelAsset(uploadAssetOptions.value, resolvedClientModelAssetId.value)?.id ?? null
+    : resolvedClientModelAssetId.value
 
   console.info('[client-workflow-progress] upload button clicked', {
     workflowId,
@@ -1305,9 +1433,16 @@ async function legacyStartWorkflowUpload() {
 }
 
 async function startWorkflowUpload() {
+  if (uploadSubmitting.value) return
+  if (!canStartClientUpload.value) {
+    uploadError.value = uploadReadiness.value.reasons.map((reason) => reason.message).join('；')
+    return
+  }
   const workflowId = resolvedWorkflowId.value
   const workflow = workflowDetail.value
-  const modelAssetId = resolvedClientModelAssetId.value
+  const modelAssetId = uploadContract.value.uploadProtocol === 'WEIGHTS_V1'
+    ? resolveUploadableModelAsset(uploadAssetOptions.value, resolvedClientModelAssetId.value)?.id ?? null
+    : resolvedClientModelAssetId.value
 
   console.info('[client-workflow-progress] upload button clicked', {
     workflowId,
@@ -1529,12 +1664,19 @@ function startPollingIfNeeded() {
     return
   }
   pollingTimer = window.setInterval(async () => {
+    const workflowId = activeWorkflowId.value
+    if (!workflowId) return
+    const previousStatus = workflowDetail.value?.status
     console.info('[client-workflow-progress] polling workflow progress', {
-      workflowId: activeWorkflowId.value,
+      workflowId,
       currentStep: workflowDetail.value?.currentStep,
-      status: workflowDetail.value?.status
+      status: previousStatus
     })
-    await loadWorkflowDetail(activeWorkflowId.value!)
+    await loadWorkflowDetail(workflowId)
+    if (activeWorkflowId.value === workflowId && previousStatus !== workflowDetail.value?.status) {
+      workflowListPage.value = 1
+      await loadWorkflowList()
+    }
   }, 4000)
 }
 
@@ -1669,6 +1811,21 @@ onBeforeUnmount(() => {
 
 .sidebar-content {
   min-height: 320px;
+}
+
+.workflow-sidebar-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  color: #6b7b8c;
+  font-size: 12px;
+}
+
+.workflow-sidebar-pagination :deep(.el-pagination) {
+  min-width: 0;
+  padding: 0;
 }
 
 .workflow-item {
@@ -1811,6 +1968,13 @@ onBeforeUnmount(() => {
   color: #5e7082;
   font-size: 13px;
   line-height: 1.8;
+}
+
+.upload-readiness {
+  margin: 0 0 16px;
+  color: #9a6700;
+  font-size: 12px;
+  line-height: 1.6;
 }
 
 .upload-action-buttons {

@@ -25,7 +25,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -122,5 +125,73 @@ class WorkflowServiceImplCreateWorkflowTest {
         Workflow inserted = workflowCaptor.getValue();
         assertEquals(1L, inserted.getModelDefinitionId());
         assertEquals("YOLOv8", inserted.getYoloVersion());
+    }
+
+    @Test
+    void shouldCreateDefinitionWorkflowWithoutPreselectedClientAsset() {
+        for (long definitionId : new long[] {1L, 2L}) {
+            SysUser client = new SysUser();
+            client.setId(10L);
+            client.setRoleCode("CLIENT");
+            when(loginUserContext.getCurrentUser()).thenReturn(client);
+
+            SysUser server = new SysUser();
+            server.setId(20L);
+            server.setRoleCode("SERVER");
+            server.setIsDeleted(0);
+            when(sysUserMapper.selectById(20L)).thenReturn(server);
+            when(workflowModelDefinitionSelectionService.resolve(any())).thenReturn(
+                    new WorkflowModelDefinitionSelectionService.WorkflowModelSelection(
+                            definitionId,
+                            definitionId == 1L ? "YOLOv8" : "InternImage-T + UPerNet",
+                            definitionId == 1L ? "YOLOv8n 羊群检测" : "InternImage-T 小麦倒伏分割"
+                    )
+            );
+            when(workflowMapper.insert(any(Workflow.class))).thenAnswer(invocation -> {
+                Workflow workflow = invocation.getArgument(0);
+                workflow.setId(40L + definitionId);
+                return 1;
+            });
+            when(workflowStepMapper.insert(any(WorkflowStep.class))).thenReturn(1);
+
+            CreateWorkflowRequest request = new CreateWorkflowRequest();
+            request.setWorkflowName("Definition workflow");
+            request.setServerUserId(20L);
+            request.setClientModelCount(2);
+            request.setModelDefinitionId(definitionId);
+
+            assertEquals(40L + definitionId, workflowService.createWorkflow(request));
+            ArgumentCaptor<Workflow> workflowCaptor = ArgumentCaptor.forClass(Workflow.class);
+            org.mockito.Mockito.verify(workflowMapper).insert(workflowCaptor.capture());
+            assertEquals(definitionId, workflowCaptor.getValue().getModelDefinitionId());
+            assertNull(workflowCaptor.getValue().getClientModelAssetId());
+            verifyNoInteractions(modelAssetMapper);
+            org.mockito.Mockito.clearInvocations(workflowMapper, workflowStepMapper, modelAssetMapper);
+        }
+    }
+
+    @Test
+    void shouldStillRequireClientAssetForLegacyWorkflow() {
+        SysUser client = new SysUser();
+        client.setId(10L);
+        client.setRoleCode("CLIENT");
+        when(loginUserContext.getCurrentUser()).thenReturn(client);
+        SysUser server = new SysUser();
+        server.setId(20L);
+        server.setRoleCode("SERVER");
+        server.setIsDeleted(0);
+        when(sysUserMapper.selectById(20L)).thenReturn(server);
+        when(workflowModelDefinitionSelectionService.resolve(any())).thenReturn(
+                new WorkflowModelDefinitionSelectionService.WorkflowModelSelection(null, "YOLOv10", "YOLOv10")
+        );
+
+        CreateWorkflowRequest request = new CreateWorkflowRequest();
+        request.setWorkflowName("Legacy workflow");
+        request.setServerUserId(20L);
+        request.setClientModelCount(1);
+
+        assertEquals("旧版工作流必须选择客户端模型",
+                assertThrows(RuntimeException.class, () -> workflowService.createWorkflow(request)).getMessage());
+        verifyNoInteractions(modelAssetMapper, workflowMapper);
     }
 }

@@ -94,9 +94,39 @@ def trusted_architecture() -> dict[str, Any]:
     return copy.deepcopy(TRUSTED_ARCHITECTURE)
 
 
-def build_model():
+def _model_config_for_definition(definition: dict[str, Any] | None) -> dict[str, Any]:
+    if definition is None:
+        return copy.deepcopy(MODEL_CONFIG)
+
+    architecture = definition.get("definitionPayload", {}).get("architecture")
+    if architecture != TRUSTED_ARCHITECTURE:
+        raise ValueError("Definition architecture does not match the trusted InternImage template.")
+    model_config = architecture.get("modelConfig")
+    if not isinstance(model_config, dict) or model_config != MODEL_CONFIG:
+        raise ValueError("Definition model configuration does not match the trusted InternImage template.")
+    return copy.deepcopy(model_config)
+
+
+def build_model(definition: dict[str, Any] | None = None):
+    config = _model_config_for_definition(definition)
+    test_cfg = config.get("test_cfg")
+    if not isinstance(test_cfg, dict) or test_cfg.get("mode") not in {"whole", "slide"}:
+        raise ValueError("Trusted InternImage test_cfg must declare a supported whole or slide mode.")
+
     # Importing the pinned runtime source registers the trusted backbone only.
     importlib.import_module("runtime_vendor.intern_image")
+    mmcv = importlib.import_module("mmcv")
     builder = importlib.import_module("mmseg.models.builder")
-    model = builder.build_segmentor(copy.deepcopy(MODEL_CONFIG))
+    config_dict = getattr(mmcv, "ConfigDict", None)
+    if config_dict is None:
+        raise RuntimeError("MMCV ConfigDict is required by MMSegmentation test_cfg.")
+    # MMSeg 0.27 EncoderDecoder.simple_test reads test_cfg.mode as an attribute.
+    config["test_cfg"] = config_dict(test_cfg)
+
+    model = builder.build_segmentor(config)
+    actual_test_cfg = getattr(model, "test_cfg", None)
+    if not hasattr(actual_test_cfg, "mode"):
+        raise TypeError("MMSegmentation model.test_cfg must support attribute access.")
+    if actual_test_cfg.mode != test_cfg["mode"] or dict(actual_test_cfg) != dict(test_cfg):
+        raise ValueError("MMSegmentation model.test_cfg differs from the trusted Definition.")
     return model

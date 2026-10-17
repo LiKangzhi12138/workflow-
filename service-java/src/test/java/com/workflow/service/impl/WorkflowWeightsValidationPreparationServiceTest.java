@@ -139,6 +139,15 @@ class WorkflowWeightsValidationPreparationServiceTest {
     }
 
     @Test
+    void rejectsGlobalWeightsFromAnotherWorkflow() {
+        workflow.setId(38L);
+
+        BusinessException error = assertThrows(BusinessException.class, () -> service.prepare(workflow));
+
+        assertEquals("WEIGHTS_VALIDATION_V1_ASSET_INVALID", error.getCode());
+    }
+
+    @Test
     void rejectsAssetThatIsNotReadyAndSuccessfullyChecked() {
         asset.setLastCheckStatus("FAILED");
 
@@ -191,7 +200,7 @@ class WorkflowWeightsValidationPreparationServiceTest {
                 + "\"dtypeSignature\":\"" + DTYPE_HASH + "\"";
         Files.writeString(weightsPath.getParent().resolve("aggregation-manifest.json"),
                 "{" + modelReference + ",\"architectureSignature\":\"" + architectureSha
-                        + "\",\"weights\":{\"sha256\":\"" + weightsSha + "\"},\"state\":{" + state + "}}");
+                        + "\",\"createdBy\":{\"workflowId\":37},\"weights\":{\"sha256\":\"" + weightsSha + "\"},\"state\":{" + state + "}}");
         Files.writeString(weightsPath.getParent().resolve("descriptor.json"),
                 "{" + modelReference + ",\"extensions\":{\"architectureSignature\":\"" + architectureSha
                         + "\"},\"stateContract\":{\"tensorCount\":355,\"elementCount\":3021500,"
@@ -200,7 +209,7 @@ class WorkflowWeightsValidationPreparationServiceTest {
         Files.writeString(weightsPath.getParent().resolve("inspection-report.json"),
                 "{\"passed\":true,\"weightsSha256\":\"" + weightsSha + "\"," + state + "}");
         Files.writeString(weightsPath.getParent().resolve("aggregation-report.json"),
-                "{\"modelDefinitionId\":\"" + definitionId + "\",\"modelDefinitionCode\":\"" + DEFINITION_ID
+                "{\"workflowId\":37,\"modelDefinitionId\":\"" + definitionId + "\",\"modelDefinitionCode\":\"" + DEFINITION_ID
                         + "\",\"definitionSha256\":\"" + definitionSha + "\",\"architectureSignature\":\""
                         + architectureSha + "\",\"output\":{\"sha256\":\"" + weightsSha + "\"," + state + "}}");
     }

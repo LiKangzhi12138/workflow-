@@ -7,7 +7,6 @@
             <div class="card-header">
               <div>
                 <div class="card-title">{{ WORKFLOW_PROGRESS_TEXT.latestWorkflows }}</div>
-                <div class="card-desc">{{ WORKFLOW_PROGRESS_TEXT.latestWorkflowsDescServer }}</div>
               </div>
               <el-button text @click="initializePage">
                 {{ WORKFLOW_PROGRESS_TEXT.refresh }}
@@ -39,6 +38,20 @@
             </template>
             <el-empty v-else :description="WORKFLOW_PROGRESS_TEXT.emptyServer" />
           </div>
+          <div v-if="workflowListTotal > 0" class="workflow-sidebar-pagination">
+            <span>共 {{ workflowListTotal }} 条</span>
+            <el-pagination
+              small
+              background
+              layout="prev, pager, next, sizes"
+              :total="workflowListTotal"
+              :current-page="workflowListPage"
+              :page-size="workflowListPageSize"
+              :page-sizes="[10, 20, 50]"
+              @current-change="handleWorkflowPageChange"
+              @size-change="handleWorkflowPageSizeChange"
+            />
+          </div>
         </el-card>
       </el-col>
 
@@ -48,7 +61,6 @@
             <div class="card-header">
               <div>
                 <div class="card-title">{{ WORKFLOW_PROGRESS_TEXT.serverPageTitle }}</div>
-                <div class="card-desc">{{ WORKFLOW_PROGRESS_TEXT.serverVisualDesc }}</div>
               </div>
             </div>
           </template>
@@ -194,6 +206,7 @@
                       filterable
                       clearable
                       :placeholder="WORKFLOW_PROGRESS_TEXT.bindDatasetPlaceholder"
+                      @change="handleDatasetDraftChange"
                     >
                       <el-option
                         v-for="item in datasetOptions"
@@ -219,6 +232,16 @@
                     @click="handleStartValidation"
                   >
                     {{ WORKFLOW_PROGRESS_TEXT.startValidation }}
+                  </el-button>
+
+                  <el-button
+                    v-if="canRetryValidation"
+                    type="primary"
+                    :loading="retryingValidation"
+                    :disabled="bindingDataset || startingValidation || retryingValidation"
+                    @click="handleRetryValidation"
+                  >
+                    重新验证
                   </el-button>
 
                   <el-button
@@ -407,9 +430,10 @@ import {
   deleteSavedWorkflowResultApi,
   getWorkflowDetailApi,
   getWorkflowUploadProgress,
-  listAllWorkflowsApi,
+  listWorkflowsApi,
   saveWorkflowResultApi,
   startPythonJobApi,
+  retryWorkflowValidationApi,
   type UploadProgressVO,
   type WorkflowDetail,
   type WorkflowListItem,
@@ -417,6 +441,9 @@ import {
 } from '@/api/workflow'
 import { listAllDatasetAssetsApi, type DatasetAssetItem } from '@/api/dataset'
 import { summarizeUiErrorMessage } from '@/utils/errorMessage'
+import { isCurrentWorkflowResponse, normalizeDatasetId, reconcileDatasetSelection } from '@/utils/datasetSelectionState'
+import { resolveValidPage } from '@/utils/pagination'
+import { isCurrentRequest, resolveProgressWorkflowTarget } from '@/utils/workflowProgressState'
 import { getWorkflowModelDisplayName } from '@/utils/workflowModelDisplay'
 import {
   computeServerProcessPercent,
@@ -429,8 +456,7 @@ import {
   getUploadStatusLabel,
   getWorkflowStatusLabel,
   isServerProcessDialogClosable,
-  resolveServerProcessPhase,
-  sortWorkflowsByLatest
+  resolveServerProcessPhase
 } from '@/constants/workflowProgress'
 
 type PhaseState = 'done' | 'current' | 'pending' | 'error'
@@ -443,19 +469,31 @@ const detailLoading = ref(false)
 const accepting = ref(false)
 const bindingDataset = ref(false)
 const startingValidation = ref(false)
+const retryingValidation = ref(false)
 const savingResult = ref(false)
 const deletingResult = ref(false)
 
 const workflowList = ref<WorkflowListItem[]>([])
+const workflowListTotal = ref(0)
+const workflowListPage = ref(1)
+const workflowListPageSize = ref(10)
 const activeWorkflowId = ref<number | null>(null)
 const workflowDetail = ref<WorkflowDetail | null>(null)
 const uploadProgress = ref<UploadProgressVO | null>(null)
 const datasetOptions = ref<DatasetAssetItem[]>([])
 const selectedDatasetId = ref<number | null>(null)
+const datasetDraftDirty = ref(false)
 const decryptDialogVisible = ref(false)
 const decryptDialogTriggeredWorkflowId = ref<number | null>(null)
 
 let pollingTimer: number | null = null
+let detailRequestSequence = 0
+let listRequestSequence = 0
+
+function handleDatasetDraftChange(value: number | string | null) {
+  selectedDatasetId.value = normalizeDatasetId(value)
+  datasetDraftDirty.value = true
+}
 
 const routeWorkflowId = computed(() => {
   const id = route.query.id || route.params.id
@@ -498,11 +536,27 @@ const decryptDialogCanClose = computed(() => isServerProcessDialogClosable(serve
 
 const canBindDataset = computed(() => {
   if (!workflowDetail.value) return false
+  const failedV1Validation = workflowDetail.value.status === 'FAILED'
+    && workflowDetail.value.federatedStatus === 'COMPLETED'
+    && !!workflowDetail.value.federatedModelAssetId
+    && !!workflowDetail.value.modelDefinitionId
+    && workflowDetail.value.federatedStrategy === 'WEIGHTS_FEDAVG_V1'
   return (
     federatedReady.value &&
-    ['ACCEPTED', 'PREPARING', 'TRAINING_RUNNING', 'VALIDATING', 'COMPLETED'].includes(workflowDetail.value.status) &&
-    !workflowDetail.value.pythonJobId
+    (['ACCEPTED', 'PREPARING', 'TRAINING_RUNNING', 'VALIDATING', 'COMPLETED'].includes(workflowDetail.value.status) || failedV1Validation) &&
+    (!workflowDetail.value.pythonJobId || failedV1Validation)
   )
+})
+
+const canRetryValidation = computed(() => {
+  const workflow = workflowDetail.value
+  if (!workflow) return false
+  const recoverSubmission = workflow.status === 'PREPARING'
+    && workflow.currentStep === '重新验证任务提交待确认'
+  return federatedReady.value && workflow.federatedStatus === 'COMPLETED'
+    && !!workflow.serverDatasetAssetId && !!workflow.pythonJobId
+    && !!workflow.modelDefinitionId && workflow.federatedStrategy === 'WEIGHTS_FEDAVG_V1'
+    && (workflow.status === 'FAILED' || recoverSubmission)
 })
 
 const canStartValidation = computed(() => {
@@ -721,19 +775,47 @@ function formatDateTime(value?: string) {
 }
 
 async function loadWorkflowList() {
+  const requestSequence = ++listRequestSequence
   listLoading.value = true
   try {
-    workflowList.value = sortWorkflowsByLatest(await listAllWorkflowsApi())
+    const response = await listWorkflowsApi({
+      pageNum: workflowListPage.value,
+      pageSize: workflowListPageSize.value
+    })
+    if (!isCurrentRequest(requestSequence, listRequestSequence)) return
+    const page = response.data
+    const validPage = resolveValidPage(workflowListPage.value, workflowListPageSize.value, page.total)
+    workflowListTotal.value = page.total
+    if (validPage !== workflowListPage.value) {
+      workflowListPage.value = validPage
+      await loadWorkflowList()
+      return
+    }
+    workflowList.value = page.records || []
     console.info('[server-workflow-progress] latest workflow list loaded', {
       workflowIds: workflowList.value.map((item) => item.id),
-      total: workflowList.value.length
+      total: workflowListTotal.value,
+      page: workflowListPage.value,
+      pageSize: workflowListPageSize.value
     })
   } catch (error: any) {
+    if (!isCurrentRequest(requestSequence, listRequestSequence)) return
     ElMessage.error(error?.message || '加载工作流列表失败。')
     workflowList.value = []
   } finally {
-    listLoading.value = false
+    if (isCurrentRequest(requestSequence, listRequestSequence)) listLoading.value = false
   }
+}
+
+async function handleWorkflowPageChange(page: number) {
+  workflowListPage.value = page
+  await loadWorkflowList()
+}
+
+async function handleWorkflowPageSizeChange(size: number) {
+  workflowListPageSize.value = size
+  workflowListPage.value = 1
+  await loadWorkflowList()
 }
 
 async function loadDatasetOptions() {
@@ -741,21 +823,23 @@ async function loadDatasetOptions() {
     datasetOptions.value = await listAllDatasetAssetsApi()
   } catch (error: any) {
     ElMessage.error(error?.message || '加载服务端数据集失败。')
-    datasetOptions.value = []
   }
 }
 
 async function loadWorkflowDetail(targetWorkflowId: number) {
+  const requestSequence = ++detailRequestSequence
   detailLoading.value = true
   try {
     const [detailRes, uploadRes] = await Promise.all([
       getWorkflowDetailApi(targetWorkflowId),
-      getWorkflowUploadProgress(targetWorkflowId).catch(() => null),
-      loadDatasetOptions()
+      getWorkflowUploadProgress(targetWorkflowId).catch(() => null)
     ])
+    if (!isCurrentWorkflowResponse(requestSequence, detailRequestSequence, targetWorkflowId, activeWorkflowId.value)) return
     workflowDetail.value = detailRes.data
     uploadProgress.value = uploadRes?.data ?? null
-    selectedDatasetId.value = detailRes.data?.serverDatasetAssetId || null
+    selectedDatasetId.value = reconcileDatasetSelection(
+      selectedDatasetId.value, detailRes.data?.serverDatasetAssetId, datasetDraftDirty.value
+    )
     console.info('[server-workflow-progress] workflow detail synced from backend', {
       workflowId: targetWorkflowId,
       workflowStatus: workflowDetail.value?.status,
@@ -765,21 +849,32 @@ async function loadWorkflowDetail(targetWorkflowId: number) {
       federatedStatus: workflowDetail.value?.federatedStatus || null
     })
   } catch (error: any) {
+    if (!isCurrentWorkflowResponse(requestSequence, detailRequestSequence, targetWorkflowId, activeWorkflowId.value)) return
     ElMessage.error(error?.message || '加载工作流进度详情失败。')
     workflowDetail.value = null
     uploadProgress.value = null
   } finally {
-    detailLoading.value = false
+    if (requestSequence === detailRequestSequence) detailLoading.value = false
   }
 }
 
 async function selectWorkflow(targetWorkflowId: number, syncRoute = false) {
   if (!targetWorkflowId) return
+  const workflowChanged = activeWorkflowId.value !== targetWorkflowId
   if (decryptDialogTriggeredWorkflowId.value && decryptDialogTriggeredWorkflowId.value !== targetWorkflowId) {
     decryptDialogTriggeredWorkflowId.value = null
     setDecryptDialogVisible(false, 'switch-workflow')
   }
   activeWorkflowId.value = targetWorkflowId
+  detailRequestSequence++
+  if (workflowChanged) {
+    workflowDetail.value = null
+    uploadProgress.value = null
+    selectedDatasetId.value = null
+  }
+  datasetDraftDirty.value = false
+  selectedDatasetId.value = null
+  if (!datasetOptions.value.length) await loadDatasetOptions()
   if (syncRoute) {
     await router.replace({
       name: 'server-progress',
@@ -825,10 +920,7 @@ function setDecryptDialogVisible(nextVisible: boolean, reason: string) {
 
 async function refreshCurrentWorkflow(targetWorkflowId = resolvedWorkflowId.value) {
   await loadWorkflowList()
-  const nextWorkflowId =
-    targetWorkflowId && workflowList.value.some((item) => item.id === targetWorkflowId)
-      ? targetWorkflowId
-      : workflowList.value[0]?.id || null
+  const nextWorkflowId = resolveProgressWorkflowTarget(targetWorkflowId, activeWorkflowId.value, workflowList.value[0]?.id)
 
   if (!nextWorkflowId) {
     activeWorkflowId.value = null
@@ -846,7 +938,8 @@ async function refreshCurrentWorkflow(targetWorkflowId = resolvedWorkflowId.valu
 
 async function initializePage() {
   await loadWorkflowList()
-  if (!workflowList.value.length) {
+  await loadDatasetOptions()
+  if (!workflowList.value.length && !routeWorkflowId.value) {
     activeWorkflowId.value = null
     workflowDetail.value = null
     uploadProgress.value = null
@@ -855,16 +948,13 @@ async function initializePage() {
   }
 
   if (routeWorkflowId.value && !workflowList.value.some((item) => item.id === routeWorkflowId.value)) {
-    console.warn('[server-workflow-progress] route workflow id is not visible, fallback to latest workflow', {
+    console.info('[server-workflow-progress] loading routed workflow outside current list page', {
       routeWorkflowId: routeWorkflowId.value,
       availableWorkflowIds: workflowList.value.map((item) => item.id)
     })
   }
 
-  const targetWorkflowId =
-    routeWorkflowId.value && workflowList.value.some((item) => item.id === routeWorkflowId.value)
-      ? routeWorkflowId.value
-      : workflowList.value[0]?.id || null
+  const targetWorkflowId = resolveProgressWorkflowTarget(routeWorkflowId.value, activeWorkflowId.value, workflowList.value[0]?.id)
   if (!targetWorkflowId) return
 
   if (!routeWorkflowId.value || routeWorkflowId.value !== targetWorkflowId) {
@@ -911,6 +1001,7 @@ async function handleBindDataset() {
   const workflowId = resolvedWorkflowId.value
   if (!workflowDetail.value || !selectedDatasetId.value || !workflowId) return
   bindingDataset.value = true
+  detailRequestSequence++
   try {
     console.info('[server-workflow-progress] bind dataset clicked', {
       workflowId,
@@ -920,9 +1011,12 @@ async function handleBindDataset() {
     await bindServerDatasetApi(workflowId, {
       serverDatasetAssetId: selectedDatasetId.value
     })
+    datasetDraftDirty.value = false
     ElMessage.success(WORKFLOW_PROGRESS_TEXT.bindDatasetSuccess)
     await refreshCurrentWorkflow(workflowId)
   } catch (error: any) {
+    datasetDraftDirty.value = false
+    selectedDatasetId.value = normalizeDatasetId(workflowDetail.value?.serverDatasetAssetId)
     ElMessage.error(error?.message || WORKFLOW_PROGRESS_TEXT.actionFailed)
   } finally {
     bindingDataset.value = false
@@ -950,6 +1044,22 @@ async function handleStartValidation() {
     ElMessage.error(error?.message || WORKFLOW_PROGRESS_TEXT.actionFailed)
   } finally {
     startingValidation.value = false
+  }
+}
+
+async function handleRetryValidation() {
+  const workflowId = resolvedWorkflowId.value
+  if (!workflowId || !canRetryValidation.value || retryingValidation.value) return
+  retryingValidation.value = true
+  try {
+    await retryWorkflowValidationApi(workflowId)
+    ElMessage.success('重新验证任务已提交。')
+    await refreshCurrentWorkflow(workflowId)
+  } catch (error: any) {
+    ElMessage.error(error?.message || '重新验证未能确认，请刷新状态后重试。')
+    await loadWorkflowDetail(workflowId)
+  } finally {
+    retryingValidation.value = false
   }
 }
 
@@ -1017,13 +1127,21 @@ function startPollingIfNeeded() {
   stopPolling()
   if (!activeWorkflowId.value || !shouldPoll()) return
   pollingTimer = window.setInterval(async () => {
+    if (bindingDataset.value) return
+    const workflowId = activeWorkflowId.value
+    if (!workflowId) return
+    const previousStatus = workflowDetail.value?.status
     console.info(WORKFLOW_PROGRESS_TEXT.decryptPollingLog, {
-      workflowId: activeWorkflowId.value,
+      workflowId,
       currentStep: workflowDetail.value?.currentStep,
       uploadStatuses: uploadRecords.value.map((item) => item.uploadStatus),
       federatedStatus: workflowDetail.value?.federatedStatus || null
     })
-    await loadWorkflowDetail(activeWorkflowId.value!)
+    await loadWorkflowDetail(workflowId)
+    if (activeWorkflowId.value === workflowId && previousStatus !== workflowDetail.value?.status) {
+      workflowListPage.value = 1
+      await loadWorkflowList()
+    }
   }, 4000)
 }
 
@@ -1131,6 +1249,21 @@ onBeforeUnmount(() => {
 
 .sidebar-content {
   min-height: 320px;
+}
+
+.workflow-sidebar-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 12px;
+  color: #6b7b8c;
+  font-size: 12px;
+}
+
+.workflow-sidebar-pagination :deep(.el-pagination) {
+  min-width: 0;
+  padding: 0;
 }
 
 .workflow-item {

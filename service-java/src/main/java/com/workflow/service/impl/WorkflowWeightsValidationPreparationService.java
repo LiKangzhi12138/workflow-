@@ -85,6 +85,12 @@ public class WorkflowWeightsValidationPreparationService {
         JsonNode descriptor = readSidecar(descriptorPath);
         JsonNode inspection = readSidecar(inspectionPath);
         JsonNode report = readSidecar(reportPath);
+        if (!manifest.path("createdBy").path("workflowId").canConvertToLong()
+                || manifest.path("createdBy").path("workflowId").asLong() != workflow.getId()
+                || !report.path("workflowId").canConvertToLong()
+                || report.path("workflowId").asLong() != workflow.getId()) {
+            throw invalidAsset("Global weights evidence belongs to another workflow.");
+        }
 
         String protocolDefinitionId = requiredText(trustedDefinition, "definitionId");
         String definitionCode = requiredText(trustedDefinition, "code");

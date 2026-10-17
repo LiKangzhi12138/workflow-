@@ -370,7 +370,9 @@ public class AssetStorageService {
         if (datasetRoot == null || !Files.exists(datasetRoot) || !Files.isDirectory(datasetRoot)) {
             return 0;
         }
-        try (var stream = Files.walk(datasetRoot)) {
+        Path imageRoot = Files.isDirectory(datasetRoot.resolve("images"))
+                ? datasetRoot.resolve("images") : datasetRoot;
+        try (var stream = Files.walk(imageRoot)) {
             return (int) stream
                     .filter(Files::isRegularFile)
                     .filter(path -> IMAGE_EXTENSIONS.contains(extensionOf(path.getFileName().toString()).toLowerCase(Locale.ROOT)))

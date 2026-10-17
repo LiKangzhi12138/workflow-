@@ -102,8 +102,7 @@ public class DatasetAssetServiceImpl implements DatasetAssetService {
         asset.setOwnerUserId(currentUser.getId());
         asset.setOwnerRoleCode(currentUser.getRoleCode());
         asset.setDatasetType(defaultDatasetType(request.getDatasetType()));
-        asset.setDataFormat(DEFAULT_DATA_FORMAT);
-        asset.setTaskType(DEFAULT_TASK_TYPE);
+        applyDatasetFormat(asset, stored.getStoredPath());
         asset.setSampleCount(request.getSampleCount());
         asset.setFileName(stored.getOriginalFilename());
         asset.setFilePath(stored.getStoredPath().toString());
@@ -151,8 +150,7 @@ public class DatasetAssetServiceImpl implements DatasetAssetService {
         asset.setOwnerUserId(currentUser.getId());
         asset.setOwnerRoleCode(currentUser.getRoleCode());
         asset.setDatasetType(defaultDatasetType(request.getDatasetType()));
-        asset.setDataFormat(DEFAULT_DATA_FORMAT);
-        asset.setTaskType(DEFAULT_TASK_TYPE);
+        applyDatasetFormat(asset, stored.getStoredPath());
         asset.setSampleCount(request.getSampleCount());
         asset.setFileName(stored.getOriginalFilename());
         asset.setFilePath(stored.getStoredPath().toString());
@@ -526,6 +524,16 @@ public class DatasetAssetServiceImpl implements DatasetAssetService {
             return resolved;
         }
         throw new BusinessException("DATASET_TYPE_INVALID", "数据集类型只支持 CROP、LIVESTOCK 或 GENERAL。");
+    }
+
+    private void applyDatasetFormat(DatasetAsset asset, Path root) {
+        if (Files.isDirectory(root.resolve("images")) && Files.isDirectory(root.resolve("masks"))) {
+            asset.setDataFormat("IMAGE_MASK_PAIRS");
+            asset.setTaskType("SEMANTIC_SEGMENTATION");
+        } else {
+            asset.setDataFormat(DEFAULT_DATA_FORMAT);
+            asset.setTaskType(DEFAULT_TASK_TYPE);
+        }
     }
 
     private String resolveRegistryCheckMessage(Exception ex, String fallback) {

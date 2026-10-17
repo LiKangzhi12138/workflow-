@@ -4,18 +4,10 @@
       <div class="hero-copy">
         <div class="hero-eyebrow">{{ roleLabel }}总览</div>
         <div class="hero-title">{{ SYSTEM_NAME_FULL }}</div>
-        <div class="hero-desc">{{ roleDescription }}</div>
         <div class="hero-meta">
           <el-tag size="large" type="primary">{{ roleLabel }}</el-tag>
           <span>当前用户：{{ user?.username || '未命名用户' }}</span>
-          <span>首页聚合展示工作流、验证结果、模型资产和快捷入口。</span>
         </div>
-      </div>
-
-      <div class="hero-score">
-        <div class="hero-score-label">最近验证准确率</div>
-        <div class="hero-score-value">{{ formatPercent(overview?.metrics?.latestAccuracy) }}</div>
-        <div class="hero-score-tip">{{ accuracyTip }}</div>
       </div>
     </section>
 
@@ -23,22 +15,14 @@
       <div class="section-head">
         <div>
           <div class="section-title">核心指标</div>
-          <div class="section-desc">优先展示当前角色最常查看的工作流与验证指标。</div>
         </div>
         <el-button @click="loadOverview">刷新概览</el-button>
       </div>
 
       <div class="metric-grid">
-        <el-card class="metric-card metric-card-primary" shadow="hover">
-          <div class="metric-label">最近一次验证准确率</div>
-          <div class="metric-value">{{ formatPercent(overview?.metrics?.latestAccuracy) }}</div>
-          <div class="metric-tip">{{ accuracyTip }}</div>
-        </el-card>
-
         <el-card v-for="metric in secondaryMetrics" :key="metric.label" class="metric-card" shadow="hover">
           <div class="metric-label">{{ metric.label }}</div>
           <div class="metric-value">{{ metric.value }}</div>
-          <div class="metric-tip">{{ metric.tip }}</div>
         </el-card>
       </div>
     </section>
@@ -47,7 +31,6 @@
       <div class="section-head">
         <div>
           <div class="section-title">当前关注</div>
-          <div class="section-desc">帮助你快速定位最近工作流和最近验证结果。</div>
         </div>
       </div>
 
@@ -57,7 +40,6 @@
             <div class="card-header">
               <div>
                 <div class="card-title">最近工作流</div>
-                <div class="card-desc">{{ latestWorkflowDesc }}</div>
               </div>
               <el-tag v-if="overview?.latestWorkflow" :type="workflowStatusTagType(overview.latestWorkflow.status)">
                 {{ workflowStatusLabel(overview.latestWorkflow.status) }}
@@ -144,7 +126,6 @@
             <div class="card-header">
               <div>
                 <div class="card-title">最近验证结果</div>
-                <div class="card-desc">优先展示最近一次成功验证，没有成功结果时展示最近任务。</div>
               </div>
               <el-tag v-if="overview?.recentValidation" :type="validationStatusTagType(overview.recentValidation.status)">
                 {{ validationStatusLabel(overview.recentValidation.status) }}
@@ -175,21 +156,6 @@
               </div>
             </div>
 
-            <div class="validation-metrics">
-              <div class="validation-metric">
-                <span class="validation-metric-label">准确率</span>
-                <span class="validation-metric-value">{{ formatPercent(overview.recentValidation.accuracy) }}</span>
-              </div>
-              <div class="validation-metric">
-                <span class="validation-metric-label">Precision</span>
-                <span class="validation-metric-value">{{ formatPercent(overview.recentValidation.precision) }}</span>
-              </div>
-              <div class="validation-metric">
-                <span class="validation-metric-label">Recall</span>
-                <span class="validation-metric-value">{{ formatPercent(overview.recentValidation.recall) }}</span>
-              </div>
-            </div>
-
             <div class="action-row">
               <el-button type="primary" @click="goToValidationPage(overview.recentValidation)">进入验证页</el-button>
             </div>
@@ -206,7 +172,6 @@
       <div class="section-head">
         <div>
           <div class="section-title">资源与入口</div>
-          <div class="section-desc">模型资产概览和常用快捷入口放在首页底部，便于快速处理下一步操作。</div>
         </div>
       </div>
 
@@ -216,9 +181,6 @@
             <div class="card-header">
               <div>
                 <div class="card-title">模型资产概览</div>
-                <div class="card-desc">
-                  {{ role === 'CLIENT' ? '查看客户端模型资产。' : '查看服务端模型资产纳管情况。' }}
-                </div>
               </div>
             </div>
           </template>
@@ -265,7 +227,6 @@
             <div class="card-header">
               <div>
                 <div class="card-title">快捷入口</div>
-                <div class="card-desc">把最常用的页面放在首页，减少二次跳转。</div>
               </div>
             </div>
           </template>
@@ -279,7 +240,6 @@
               @click="router.push(item.path)"
             >
               <span class="quick-title">{{ item.label }}</span>
-              <span class="quick-desc">{{ item.desc }}</span>
             </button>
           </div>
         </el-card>
@@ -311,26 +271,6 @@ const role = computed(() => props.role)
 const basePath = computed(() => (props.role === 'CLIENT' ? '/client' : '/server'))
 
 const roleLabel = computed(() => ROLE_LABELS[props.role] || props.role)
-
-const roleDescription = computed(() =>
-  props.role === 'CLIENT'
-    ? '面向农业保险场景的联邦学习与隐私保护原型系统，帮助客户端操作者快速掌握我的工作流、最近验证结果与模型资产状态。'
-    : '面向农业保险场景的联邦学习与隐私保护原型系统，帮助服务端操作者快速掌握工作流接收、解密纳管、验证分析与联邦学习状态。'
-)
-
-const accuracyTip = computed(() => {
-  const accuracy = overview.value?.metrics?.latestAccuracy
-  if (accuracy == null) {
-    return '暂无验证结果，可进入验证页查看或发起新的验证任务。'
-  }
-  return `取值来源：${overview.value?.metrics?.latestAccuracySourceLabel || '最近一次验证结果'}`
-})
-
-const latestWorkflowDesc = computed(() =>
-  props.role === 'CLIENT'
-    ? '展示当前用户最近一条工作流的状态、阶段与快捷操作。'
-    : '展示当前服务端最近接收到的工作流，以及接收、解密、验证等处理情况。'
-)
 
 const secondaryMetrics = computed(() => {
   const metrics = overview.value?.metrics
@@ -432,12 +372,6 @@ function formatDateTime(value?: string | null) {
   } catch {
     return value
   }
-}
-
-function formatPercent(value?: number | null) {
-  if (value == null || Number.isNaN(Number(value))) return '--'
-  const normalized = Number(value)
-  return `${(normalized * 100).toFixed(2)}%`
 }
 
 function formatCount(value?: number | null) {
@@ -544,39 +478,23 @@ watch(
 }
 
 .hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1.8fr) minmax(280px, 0.8fr);
-  gap: 20px;
-  padding: 28px;
-  border-radius: 8px;
-  background:
-    radial-gradient(circle at top right, rgba(34, 197, 94, 0.14), transparent 34%),
-    linear-gradient(135deg, #f8fafc 0%, #eef6ff 46%, #fff7ed 100%);
-  border: 1px solid rgba(148, 163, 184, 0.24);
+  padding: 4px 0 16px;
+  border-bottom: 1px solid #e5e7eb;
 }
 
 .hero-eyebrow {
   font-size: 13px;
   font-weight: 700;
-  letter-spacing: 0.12em;
   color: #0369a1;
   text-transform: uppercase;
 }
 
 .hero-title {
-  margin-top: 10px;
-  font-size: 32px;
+  margin-top: 6px;
+  font-size: 24px;
   line-height: 1.25;
   font-weight: 800;
   color: #0f172a;
-}
-
-.hero-desc {
-  margin-top: 12px;
-  line-height: 1.8;
-  color: #334155;
-  max-width: 760px;
-  overflow-wrap: anywhere;
 }
 
 .hero-meta {
@@ -586,35 +504,6 @@ watch(
   flex-wrap: wrap;
   color: #475569;
   font-size: 14px;
-}
-
-.hero-score {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  padding: 24px;
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.76);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-}
-
-.hero-score-label {
-  font-size: 14px;
-  color: #64748b;
-}
-
-.hero-score-value {
-  margin-top: 10px;
-  font-size: 44px;
-  font-weight: 800;
-  color: #0f172a;
-}
-
-.hero-score-tip {
-  margin-top: 10px;
-  color: #475569;
-  line-height: 1.7;
-  overflow-wrap: anywhere;
 }
 
 .section-block {
@@ -651,17 +540,12 @@ watch(
 }
 
 .metric-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .metric-card,
 .content-card {
   border-radius: 8px;
-}
-
-.metric-card-primary {
-  background: linear-gradient(145deg, #0f172a 0%, #1d4ed8 100%);
-  color: #fff;
 }
 
 .metric-label {
@@ -875,7 +759,6 @@ watch(
 }
 
 @media (max-width: 1200px) {
-  .hero,
   .metric-grid,
   .content-grid {
     grid-template-columns: 1fr;
@@ -889,8 +772,6 @@ watch(
     grid-template-columns: 1fr;
   }
 
-  .hero {
-    padding: 20px;
-  }
+  .hero { padding: 4px 0 16px; }
 }
 </style>

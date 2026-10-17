@@ -39,7 +39,7 @@ export interface ServerUserOption {
 export interface CreateWorkflowRequest {
   workflowName: string
   serverUserId: number
-  clientModelAssetId: number
+  clientModelAssetId?: number
   clientModelCount: number
   modelDefinitionId?: number
   yoloVersion?: string
@@ -285,6 +285,10 @@ export function bindServerDatasetApi(id: number, data: BindServerDatasetRequest)
 }
 export function startPythonJobApi(id: number) {
   return http.post<ApiResponse<null>, ApiResponse<null>>(`/workflows/${id}/start-python-job`)
+}
+
+export function retryWorkflowValidationApi(id: number) {
+  return http.post<ApiResponse<null>, ApiResponse<null>>(`/workflows/${id}/validation/retry`)
 }
 
 export function saveWorkflowResultApi(id: number) {

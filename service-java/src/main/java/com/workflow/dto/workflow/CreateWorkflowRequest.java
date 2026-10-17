@@ -16,7 +16,6 @@ public class CreateWorkflowRequest {
     @NotNull(message = "服务端用户ID不能为空")
     private Long serverUserId;
 
-    @NotNull(message = "客户端模型ID不能为空")
     private Long clientModelAssetId;
 
     @NotNull(message = "客户端模型数量不能为空")

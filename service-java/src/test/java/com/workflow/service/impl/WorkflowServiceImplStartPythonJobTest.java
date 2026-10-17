@@ -40,6 +40,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -217,6 +219,240 @@ class WorkflowServiceImplStartPythonJobTest {
         assertEquals("YOLOV8N_SHEEP_V1", request.getTrustedModelDefinition().path("definitionId").asText());
         assertEquals(77L, request.getGlobalWeights().getAssetId());
         verify(workflowFederatedAggregationService, never()).resolveFederatedModelAvailability(workflow);
+    }
+
+    @Test
+    void shouldRouteInternImageWithManagedImageMaskDataset() throws Exception {
+        Workflow workflow = buildWorkflow();
+        workflow.setModelDefinitionId(2L);
+        workflow.setFederatedStrategy(WorkflowWeightsFederatedAggregationService.STRATEGY);
+        when(workflowMapper.selectOne(any())).thenReturn(workflow);
+        when(weightsValidationPreparationService.isV1Workflow(workflow)).thenReturn(true);
+        var trustedDefinition = new ObjectMapper().readTree("{\"definitionId\":\"INTERNIMAGE_T_UPERNET_WHEAT_V1\",\"taskType\":\"SEMANTIC_SEGMENTATION\",\"version\":\"master@31c962dc\"}");
+        PythonWeightsValidationJobInput weights = new PythonWeightsValidationJobInput();
+        weights.setAssetId(80L);
+        when(weightsValidationPreparationService.prepare(workflow)).thenReturn(
+                new WorkflowWeightsValidationPreparationService.PreparedValidation(
+                        tempDir.resolve("global_weights.pt").toString(), "INTERNIMAGE_RUNTIME_V1", trustedDefinition, weights));
+
+        Path datasetDir = tempDir.resolve("dataset-segmentation");
+        Files.createDirectories(datasetDir);
+        DatasetAsset dataset = new DatasetAsset();
+        dataset.setId(21L);
+        dataset.setFilePath(datasetDir.toString());
+        dataset.setTaskType("SEMANTIC_SEGMENTATION");
+        dataset.setDataFormat("IMAGE_MASK_PAIRS");
+        dataset.setOwnerUserId(2L);
+        dataset.setRecordMode("FORMAL_ASSET");
+        dataset.setStatus("READY");
+        dataset.setLastCheckStatus("OK");
+        when(datasetAssetMapper.selectOne(any())).thenReturn(dataset);
+
+        PythonCreateJobResponse response = new PythonCreateJobResponse();
+        response.setCode("OK");
+        PythonCreateJobResponseData data = new PythonCreateJobResponseData();
+        data.setJobId("intern-job");
+        response.setData(data);
+        when(pythonJobClient.createJob(any())).thenReturn(response);
+
+        workflowService.startPythonJob(workflow.getId());
+        ArgumentCaptor<PythonCreateJobRequest> captor = ArgumentCaptor.forClass(PythonCreateJobRequest.class);
+        verify(pythonJobClient).createJob(captor.capture());
+        assertEquals("INTERNIMAGE_RUNTIME_V1", captor.getValue().getRuntimeProfileId());
+        assertEquals("INTERNIMAGE_T_UPERNET_WHEAT_V1", captor.getValue().getTrustedModelDefinition().path("definitionId").asText());
+        assertEquals(80L, captor.getValue().getGlobalWeights().getAssetId());
+        assertEquals(21L, captor.getValue().getDatasetAssetId());
+        assertEquals("master@31c962dc", captor.getValue().getAlgorithmType());
+        verify(pythonJobClient).checkSegmentationDataset(any(), eq("INTERNIMAGE_RUNTIME_V1"), eq(datasetDir.toString()));
+        verify(workflowFederatedAggregationService, never()).resolveFederatedModelAvailability(workflow);
+    }
+
+    @Test
+    void failedV1ValidationClaimsNewJobWithoutRepeatingFedAvg() throws Exception {
+        Workflow workflow = buildWorkflow();
+        workflow.setStatus("FAILED");
+        workflow.setPythonJobId("failed-job");
+        workflow.setModelDefinitionId(2L);
+        workflow.setFederatedStrategy(WorkflowWeightsFederatedAggregationService.STRATEGY);
+        when(workflowMapper.selectOne(any())).thenReturn(workflow);
+        when(weightsValidationPreparationService.isV1Workflow(workflow)).thenReturn(true);
+        Path datasetDir = tempDir.resolve("retry-dataset");
+        Files.createDirectories(datasetDir);
+        DatasetAsset dataset = new DatasetAsset();
+        dataset.setId(20L);
+        dataset.setOwnerUserId(2L);
+        dataset.setFilePath(datasetDir.toString());
+        dataset.setFilePathValidated(1);
+        dataset.setStatus("READY");
+        dataset.setDataFormat("IMAGE_MASK_PAIRS");
+        dataset.setRecordMode("FORMAL_ASSET");
+        dataset.setLastCheckStatus("OK");
+        when(datasetAssetMapper.selectOne(any())).thenReturn(dataset);
+        var definition = new ObjectMapper().readTree("{\"taskType\":\"SEMANTIC_SEGMENTATION\",\"version\":\"InternImage-T\"}");
+        when(weightsValidationPreparationService.prepare(workflow)).thenReturn(
+                new WorkflowWeightsValidationPreparationService.PreparedValidation(
+                        tempDir.resolve("global_weights.pt").toString(), "INTERNIMAGE_RUNTIME_V1",
+                        definition, new PythonWeightsValidationJobInput()));
+        when(workflowMapper.claimValidationRetry(eq(9L), eq("failed-job"), anyString())).thenReturn(1);
+        when(pythonJobClient.createJob(any())).thenAnswer(invocation -> {
+            PythonCreateJobRequest request = invocation.getArgument(0);
+            PythonCreateJobResponse response = new PythonCreateJobResponse();
+            PythonCreateJobResponseData data = new PythonCreateJobResponseData();
+            data.setJobId(request.getJobId());
+            response.setData(data);
+            return response;
+        });
+
+        workflowService.retryValidation(workflow.getId());
+
+        ArgumentCaptor<PythonCreateJobRequest> request = ArgumentCaptor.forClass(PythonCreateJobRequest.class);
+        verify(pythonJobClient).createJob(request.capture());
+        assertEquals("WEIGHTS_PROTOCOL_V1", request.getValue().getValidationMode());
+        assertEquals("INTERNIMAGE_RUNTIME_V1", request.getValue().getRuntimeProfileId());
+        assertFalse("failed-job".equals(request.getValue().getJobId()));
+        verify(pythonJobClient).checkSegmentationDataset(any(), eq("INTERNIMAGE_RUNTIME_V1"), eq(datasetDir.toString()));
+        verify(workflowFederatedAggregationService, never()).resolveFederatedModelAvailability(any());
+    }
+
+    @Test
+    void concurrentRetryClaimRejectsSecondRequest() throws Exception {
+        Workflow workflow = buildWorkflow();
+        workflow.setStatus("FAILED");
+        workflow.setPythonJobId("failed-job");
+        workflow.setModelDefinitionId(1L);
+        workflow.setFederatedStrategy(WorkflowWeightsFederatedAggregationService.STRATEGY);
+        when(workflowMapper.selectOne(any())).thenReturn(workflow);
+        when(weightsValidationPreparationService.isV1Workflow(workflow)).thenReturn(true);
+        Path datasetDir = tempDir.resolve("retry-yolo-dataset");
+        Files.createDirectories(datasetDir);
+        DatasetAsset dataset = new DatasetAsset();
+        dataset.setId(20L);
+        dataset.setOwnerUserId(2L);
+        dataset.setFilePath(datasetDir.toString());
+        dataset.setFilePathValidated(1);
+        dataset.setStatus("READY");
+        when(datasetAssetMapper.selectOne(any())).thenReturn(dataset);
+        var definition = new ObjectMapper().readTree("{\"taskType\":\"DETECTION\"}");
+        when(weightsValidationPreparationService.prepare(workflow)).thenReturn(
+                new WorkflowWeightsValidationPreparationService.PreparedValidation(
+                        tempDir.resolve("global_weights.pt").toString(), "YOLO_RUNTIME_V1",
+                        definition, new PythonWeightsValidationJobInput()));
+        when(workflowMapper.claimValidationRetry(eq(9L), eq("failed-job"), anyString())).thenReturn(0);
+
+        BusinessException error = assertThrows(BusinessException.class, () -> workflowService.retryValidation(9L));
+        assertEquals("VALIDATION_RETRY_ALREADY_RUNNING", error.getCode());
+        verify(pythonJobClient, never()).createJob(any());
+    }
+
+    @Test
+    void uncertainRetrySubmissionReusesSameJobId() throws Exception {
+        Workflow workflow = buildWorkflow();
+        workflow.setStatus("FAILED");
+        workflow.setPythonJobId("failed-job");
+        workflow.setModelDefinitionId(1L);
+        workflow.setFederatedStrategy(WorkflowWeightsFederatedAggregationService.STRATEGY);
+        when(workflowMapper.selectOne(any())).thenReturn(workflow);
+        when(weightsValidationPreparationService.isV1Workflow(workflow)).thenReturn(true);
+        Path datasetDir = tempDir.resolve("retry-uncertain-dataset");
+        Files.createDirectories(datasetDir);
+        DatasetAsset dataset = new DatasetAsset();
+        dataset.setId(20L);
+        dataset.setOwnerUserId(2L);
+        dataset.setFilePath(datasetDir.toString());
+        dataset.setFilePathValidated(1);
+        dataset.setStatus("READY");
+        when(datasetAssetMapper.selectOne(any())).thenReturn(dataset);
+        var definition = new ObjectMapper().readTree("{\"taskType\":\"DETECTION\"}");
+        when(weightsValidationPreparationService.prepare(workflow)).thenReturn(
+                new WorkflowWeightsValidationPreparationService.PreparedValidation(
+                        tempDir.resolve("global_weights.pt").toString(), "YOLO_RUNTIME_V1",
+                        definition, new PythonWeightsValidationJobInput()));
+        when(workflowMapper.claimValidationRetry(eq(9L), eq("failed-job"), anyString())).thenReturn(1);
+        when(workflowMapper.reclaimValidationSubmission(eq(9L), anyString())).thenReturn(1);
+        when(pythonJobClient.createJob(any())).thenThrow(new RuntimeException("timeout"))
+                .thenAnswer(invocation -> {
+                    PythonCreateJobRequest request = invocation.getArgument(0);
+                    PythonCreateJobResponse response = new PythonCreateJobResponse();
+                    PythonCreateJobResponseData data = new PythonCreateJobResponseData();
+                    data.setJobId(request.getJobId());
+                    response.setData(data);
+                    return response;
+                });
+
+        assertThrows(RuntimeException.class, () -> workflowService.retryValidation(workflow.getId()));
+        ArgumentCaptor<PythonCreateJobRequest> requests = ArgumentCaptor.forClass(PythonCreateJobRequest.class);
+        verify(workflowMapper).markValidationSubmissionUncertain(eq(9L), anyString());
+        workflow.setStatus("PREPARING");
+        workflow.setCurrentStep("重新验证任务提交待确认");
+        verify(pythonJobClient).createJob(requests.capture());
+        String claimedJobId = requests.getValue().getJobId();
+        workflow.setPythonJobId(claimedJobId);
+
+        workflowService.retryValidation(workflow.getId());
+
+        ArgumentCaptor<PythonCreateJobRequest> allRequests = ArgumentCaptor.forClass(PythonCreateJobRequest.class);
+        verify(pythonJobClient, org.mockito.Mockito.times(2)).createJob(allRequests.capture());
+        assertEquals(claimedJobId, allRequests.getAllValues().get(1).getJobId());
+    }
+
+    @Test
+    void bindingRejectsStatusChangedByConcurrentRetry() throws Exception {
+        Workflow workflow = buildWorkflow();
+        workflow.setStatus("FAILED");
+        workflow.setPythonJobId("failed-job");
+        workflow.setModelDefinitionId(1L);
+        workflow.setFederatedStrategy(WorkflowWeightsFederatedAggregationService.STRATEGY);
+        when(workflowMapper.selectOne(any())).thenReturn(workflow);
+        when(weightsValidationPreparationService.isV1Workflow(workflow)).thenReturn(true);
+        Path datasetDir = tempDir.resolve("bind-race-dataset");
+        Files.createDirectories(datasetDir);
+        DatasetAsset dataset = new DatasetAsset();
+        dataset.setId(21L);
+        dataset.setOwnerUserId(2L);
+        dataset.setFilePath(datasetDir.toString());
+        dataset.setFilePathValidated(1);
+        dataset.setImageCount(1);
+        when(datasetAssetMapper.selectOne(any())).thenReturn(dataset);
+        when(weightsValidationPreparationService.prepare(workflow)).thenReturn(
+                new WorkflowWeightsValidationPreparationService.PreparedValidation(
+                        tempDir.resolve("global_weights.pt").toString(), "YOLO_RUNTIME_V1",
+                        new ObjectMapper().readTree("{\"taskType\":\"DETECTION\"}"),
+                        new PythonWeightsValidationJobInput()));
+
+        BusinessException error = assertThrows(BusinessException.class,
+                () -> workflowService.bindServerDataset(workflow.getId(), dataset.getId()));
+
+        assertEquals("DATASET_BIND_CONFLICT", error.getCode());
+        verify(workflowMapper).bindDatasetIfCurrent(9L, 21L, "FAILED", "failed-job");
+        verify(workflowMapper, never()).updateById(any(Workflow.class));
+    }
+
+    @Test
+    void shouldRejectPathRegistryDatasetForInternImageValidation() throws Exception {
+        Workflow workflow = buildWorkflow();
+        workflow.setModelDefinitionId(2L);
+        workflow.setFederatedStrategy(WorkflowWeightsFederatedAggregationService.STRATEGY);
+        when(workflowMapper.selectOne(any())).thenReturn(workflow);
+        when(weightsValidationPreparationService.isV1Workflow(workflow)).thenReturn(true);
+        var definition = new ObjectMapper().readTree("{\"taskType\":\"SEMANTIC_SEGMENTATION\"}");
+        when(weightsValidationPreparationService.prepare(workflow)).thenReturn(
+                new WorkflowWeightsValidationPreparationService.PreparedValidation(
+                        tempDir.resolve("global_weights.pt").toString(), "INTERNIMAGE_RUNTIME_V1",
+                        definition, new PythonWeightsValidationJobInput()));
+        DatasetAsset dataset = new DatasetAsset();
+        dataset.setId(21L);
+        dataset.setOwnerUserId(2L);
+        dataset.setRecordMode("PATH_REGISTRY");
+        dataset.setStatus("READY");
+        dataset.setLastCheckStatus("OK");
+        dataset.setTaskType("SEMANTIC_SEGMENTATION");
+        dataset.setDataFormat("IMAGE_MASK_PAIRS");
+        when(datasetAssetMapper.selectOne(any())).thenReturn(dataset);
+
+        BusinessException failure = assertThrows(BusinessException.class,
+                () -> workflowService.startPythonJob(workflow.getId()));
+        assertEquals("DATASET_INCOMPATIBLE", failure.getCode());
+        verify(pythonJobClient, never()).createJob(any());
     }
 
     @Test

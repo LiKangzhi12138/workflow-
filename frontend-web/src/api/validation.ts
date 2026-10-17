@@ -35,6 +35,12 @@ export interface ValidationMetrics {
   recall?: number
   map50?: number
   map50_95?: number
+  taskType?: string
+  metricsMode?: string
+  mIoU?: number | null
+  mAcc?: number | null
+  aAcc?: number | null
+  segmentationPerClass?: Array<{ classId: number; className: string; iou?: number | null; accuracy?: number | null }>
   accuracy?: number
   totalImages?: number
   cropDetections?: number
@@ -86,6 +92,8 @@ export interface ValidationResultSample {
   sampleIndex: number
   imageName?: string
   imageUrl?: string
+  sourceImageUrl?: string
+  predictionMaskUrl?: string
   isAnnotated?: boolean
   annotatedImageAvailable?: boolean
   predictionCount?: number
@@ -107,6 +115,8 @@ export interface ValidationResultView {
   modelName?: string
   datasetName?: string
   algorithmType?: string
+  modelDefinitionCode?: string
+  runtimeProfileId?: string
   status: string
   progress?: number
   pythonJobId?: string
@@ -117,6 +127,12 @@ export interface ValidationResultView {
   recall?: number
   map50?: number
   map50_95?: number
+  taskType?: string
+  metricsMode?: string
+  mIoU?: number | null
+  mAcc?: number | null
+  aAcc?: number | null
+  segmentationPerClass?: Array<{ classId: number; className: string; iou?: number | null; accuracy?: number | null }>
   fallback?: boolean
   fallbackReason?: string
   qualityLabel?: string

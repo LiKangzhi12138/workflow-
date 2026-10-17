@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "build-only": "vite build",
     "type-check": "vue-tsc --build",
-    "test:model-definition": "node --test tests/modelDefinitionSelection.test.ts tests/minimalModelSelection.test.ts tests/workflowModelDisplay.test.ts tests/weightsPackageUpload.test.ts tests/workflowProgress.test.ts",
+    "test:model-definition": "node --test tests/modelDefinitionSelection.test.ts tests/minimalModelSelection.test.ts tests/workflowModelDisplay.test.ts tests/weightsPackageUpload.test.ts tests/workflowProgress.test.ts tests/datasetSelectionState.test.ts tests/validationResultPresentation.test.ts tests/validationResultCardContract.test.ts tests/workflowProgressState.test.ts tests/workflowCreateAssetSelection.test.ts tests/workflowUploadSelection.test.ts tests/workflowUploadReadiness.test.ts",
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {

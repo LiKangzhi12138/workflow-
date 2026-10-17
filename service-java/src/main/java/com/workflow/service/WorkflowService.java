@@ -22,6 +22,8 @@ public interface WorkflowService {
 
     void startPythonJob(Long workflowId);
 
+    void retryValidation(Long workflowId);
+
     void handlePythonCallback(PythonCallbackRequest request);
 
     void saveWorkflowResult(Long workflowId);

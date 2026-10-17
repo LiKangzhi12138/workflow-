@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import logging
 from typing import Any
 
 from app.model_template import (
@@ -26,6 +27,7 @@ PROHIBITED_CONSTRUCTION_FIELDS = {
     "pretrainedCheckpointPath",
     "resume_from",
 }
+logger = logging.getLogger("internimage-runtime.definition-check")
 
 
 def canonical_sha256(value: Any) -> str:
@@ -103,7 +105,10 @@ def _result(
 
 
 def check_definition(
-    definition: dict[str, Any], runtime_profile_id: str
+    definition: dict[str, Any],
+    runtime_profile_id: str,
+    *,
+    diagnostic_context: tuple[int, str, int, str] | None = None,
 ) -> ModelAvailabilityResult:
     if runtime_profile_id != RUNTIME_PROFILE_ID or definition.get("runtimeProfileId") != RUNTIME_PROFILE_ID:
         return _result(
@@ -198,7 +203,7 @@ def check_definition(
         )
 
     try:
-        model = build_model()
+        model = build_model(definition)
         state = model.state_dict()
         tensor_count = len(state)
         element_count = sum(int(tensor.numel()) for tensor in state.values())
@@ -209,6 +214,23 @@ def check_definition(
             and int(model.auxiliary_head.num_classes) == 3
         )
     except Exception as exc:
+        if diagnostic_context is None:
+            logger.exception(
+                "InternImage architecture self-check failed: runtimeProfileId=%s exceptionType=%s",
+                runtime_profile_id,
+                type(exc).__name__,
+            )
+        else:
+            workflow_id, job_id, asset_id, profile_id = diagnostic_context
+            logger.exception(
+                "InternImage architecture self-check failed: workflowId=%s jobId=%s assetId=%s "
+                "runtimeProfileId=%s exceptionType=%s",
+                workflow_id,
+                job_id,
+                asset_id,
+                profile_id,
+                type(exc).__name__,
+            )
         return _result(
             definition,
             available=False,

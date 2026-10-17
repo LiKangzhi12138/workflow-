@@ -17,7 +17,8 @@ from app.schemas.model_protocol import (
 )
 from app.services.runtime_profile_registry import runtime_profile_registry
 from app.services.weights_package_inspector import weights_package_inspector
-from app.services.yolo_runtime_client import YoloRuntimeClientError, yolo_runtime_client
+from app.services.runtime_client_error import RuntimeClientError
+from app.services.runtime_client_registry import runtime_client_registry
 
 
 class WeightsValidationV1Error(RuntimeError):
@@ -134,12 +135,18 @@ class WeightsValidationV1Service:
             sampleOutputDirectory=sample_output_directory,
             algorithmType=str(job.get("algorithmType") or definition.version),
         )
+        runtime_client = runtime_client_registry.get(runtime_profile_id)
+        self._require(
+            runtime_client is not None and callable(getattr(runtime_client, "validate_weights", None)),
+            "RUNTIME_PROFILE_NOT_FOUND", "The model runtime has no validation capability.",
+        )
         try:
-            result = yolo_runtime_client.validate_weights(runtime_request)
-        except YoloRuntimeClientError as exc:
+            result = runtime_client.validate_weights(runtime_request)
+        except RuntimeClientError as exc:
+            reason_code = getattr(exc, "reason_code", None)
             raise WeightsValidationV1Error(
-                "WEIGHTS_VALIDATION_V1_RUNTIME_FAILED",
-                "Model runtime validation request failed.",
+                reason_code or "WEIGHTS_VALIDATION_V1_RUNTIME_FAILED",
+                f"[{reason_code}] {exc}" if reason_code else "Model runtime validation request failed.",
             ) from exc
 
         self._require(
@@ -153,12 +160,25 @@ class WeightsValidationV1Service:
             and result.reconstruction.get("weightsOnly") is True
             and result.reconstruction.get("checkpointUsed") is False
             and result.reconstruction.get("baseCheckpointUsed") is False
+            and result.reconstruction.get("pretrainedUsed", False) is False
             and result.reconstruction.get("strictLoad") is True
             and result.reconstruction.get("missingKeyCount") == 0
             and result.reconstruction.get("unexpectedKeyCount") == 0,
             "WEIGHTS_VALIDATION_V1_RUNTIME_EVIDENCE_INVALID",
             "Model runtime returned invalid reconstruction evidence.",
         )
+        if definition.taskType == "SEMANTIC_SEGMENTATION":
+            metrics = result.metrics
+            self._require(
+                metrics.get("taskType") == "SEMANTIC_SEGMENTATION"
+                and metrics.get("metricsMode") == "GROUND_TRUTH"
+                and metrics.get("metricType") == "SEGMENTATION_GROUND_TRUTH"
+                and all(isinstance(metrics.get(key), (int, float)) for key in ("mIoU", "mAcc", "aAcc"))
+                and isinstance(metrics.get("perClass"), list)
+                and len(metrics["perClass"]) == definition.classCount,
+                "WEIGHTS_VALIDATION_V1_RUNTIME_EVIDENCE_INVALID",
+                "Runtime returned invalid segmentation metric evidence.",
+            )
         self._materialize_sample_images(result.validationResult, sample_output_directory)
         return result
 
@@ -197,6 +217,16 @@ class WeightsValidationV1Service:
             output_path.write_bytes(content)
             sample["annotated_image_path"] = str(output_path)
             sample["annotated_image_available"] = True
+            mask_encoded = sample.pop("prediction_mask_base64", None)
+            if mask_encoded:
+                try:
+                    mask_content = base64.b64decode(mask_encoded, validate=True)
+                except Exception as exc:
+                    raise WeightsValidationV1Error("WEIGHTS_VALIDATION_V1_RUNTIME_EVIDENCE_INVALID", "Runtime returned an invalid prediction mask.") from exc
+                self._require(0 < len(mask_content) <= 10 * 1024 * 1024, "WEIGHTS_VALIDATION_V1_RUNTIME_EVIDENCE_INVALID", "Runtime prediction mask is too large.")
+                mask_path = sample_directory / f"sample_{index:03d}_prediction.png"
+                mask_path.write_bytes(mask_content)
+                sample["prediction_mask_path"] = str(mask_path)
 
     def _read_model(self, raw_path: Any, model_type):
         try:

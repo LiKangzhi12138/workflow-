@@ -134,7 +134,7 @@ class WorkflowServiceImplCallbackTest {
         );
 
         lenient().when(workflowStepMapper.selectCount(any())).thenReturn(0L);
-        lenient().when(workflowMapper.updateById(any(Workflow.class))).thenReturn(1);
+        lenient().when(workflowMapper.update(any(Workflow.class), any())).thenReturn(1);
         lenient().when(workflowStepMapper.insert(any(WorkflowStep.class))).thenReturn(1);
     }
 
@@ -193,7 +193,7 @@ class WorkflowServiceImplCallbackTest {
 
         assertEquals("PREPARING", workflow.getStatus());
         assertEquals(30, workflow.getProgress());
-        verify(workflowMapper).updateById(workflow);
+        verify(workflowMapper).update(any(Workflow.class), any());
         verify(workflowStepMapper, never()).insert(any(WorkflowStep.class));
     }
 
@@ -206,7 +206,7 @@ class WorkflowServiceImplCallbackTest {
 
         assertDoesNotThrow(() -> workflowService.handlePythonCallback(request));
 
-        verify(workflowMapper, never()).updateById(any(Workflow.class));
+        verify(workflowMapper, never()).update(any(Workflow.class), any());
         verify(workflowStepMapper, never()).insert(any(WorkflowStep.class));
     }
 
@@ -222,7 +222,7 @@ class WorkflowServiceImplCallbackTest {
 
         assertEquals("VALIDATING", workflow.getStatus());
         assertEquals(85, workflow.getProgress());
-        verify(workflowMapper, never()).updateById(any(Workflow.class));
+        verify(workflowMapper, never()).update(any(Workflow.class), any());
         verify(workflowStepMapper, never()).insert(any(WorkflowStep.class));
     }
 
@@ -235,7 +235,7 @@ class WorkflowServiceImplCallbackTest {
 
         assertDoesNotThrow(() -> workflowService.handlePythonCallback(request));
 
-        verify(workflowMapper, never()).updateById(any(Workflow.class));
+        verify(workflowMapper, never()).update(any(Workflow.class), any());
         verify(workflowStepMapper, never()).insert(any(WorkflowStep.class));
     }
 
@@ -255,7 +255,7 @@ class WorkflowServiceImplCallbackTest {
         assertEquals(100, workflow.getProgress());
         assertEquals("D:/results/job-123_result.json", workflow.getResultFilePath());
         assertNotNull(workflow.getMetricsJson());
-        verify(workflowMapper).updateById(workflow);
+        verify(workflowMapper).update(any(Workflow.class), any());
         verify(workflowStepMapper, never()).insert(any(WorkflowStep.class));
     }
 
@@ -269,7 +269,30 @@ class WorkflowServiceImplCallbackTest {
 
         RuntimeException error = assertThrows(RuntimeException.class, () -> workflowService.handlePythonCallback(request));
         assertEquals("Python 回调签名校验失败", error.getMessage());
-        verify(workflowMapper, never()).updateById(any(Workflow.class));
+        verify(workflowMapper, never()).update(any(Workflow.class), any());
+        verify(workflowStepMapper, never()).insert(any(WorkflowStep.class));
+    }
+
+    @Test
+    void oldJobCallbackCannotOverwriteRetriedWorkflow() {
+        Workflow workflow = buildWorkflow("PREPARING");
+        workflow.setPythonJobId("replacement-job");
+        when(workflowMapper.selectOne(any())).thenReturn(workflow);
+
+        assertThrows(RuntimeException.class, () -> workflowService.handlePythonCallback(buildFailedRequest()));
+
+        verify(workflowMapper, never()).update(any(Workflow.class), any());
+        verify(workflowStepMapper, never()).insert(any(WorkflowStep.class));
+    }
+
+    @Test
+    void callbackLosingRaceToRetryCannotPersistResult() {
+        Workflow workflow = buildWorkflow("FAILED");
+        when(workflowMapper.selectOne(any())).thenReturn(workflow);
+        when(workflowMapper.update(any(Workflow.class), any())).thenReturn(0);
+
+        assertThrows(RuntimeException.class, () -> workflowService.handlePythonCallback(buildFailedRequest()));
+
         verify(workflowStepMapper, never()).insert(any(WorkflowStep.class));
     }
 

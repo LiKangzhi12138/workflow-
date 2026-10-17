@@ -8,41 +8,19 @@
 
     <el-card class="main-card" v-loading="workflowLoading && isWorkflowMode">
       <template v-if="isWorkflowMode">
-        <div class="section-intro">
-          <div class="section-title">{{ VALIDATION_TEXT.workflowValidationConsole }}</div>
-          <div class="section-desc">
-            这里展示的是工作流主链路产生的验证结果，与独立本地验证结果分开展示。
-          </div>
-        </div>
-
         <template v-if="workflowDetail">
           <el-descriptions :column="2" border class="summary-grid">
             <el-descriptions-item label="工作流名称">
               {{ workflowDetail.workflowName }}
             </el-descriptions-item>
-            <el-descriptions-item label="YOLO 版本">
-              {{ workflowDetail.yoloVersion || '-' }}
+            <el-descriptions-item label="模型">
+              {{ workflowDetail.modelDefinitionDisplayName || workflowDetail.yoloVersion || '-' }}
             </el-descriptions-item>
             <el-descriptions-item label="状态">
               <el-tag :type="workflowStatusTagType">{{ workflowStatusLabel }}</el-tag>
             </el-descriptions-item>
-            <el-descriptions-item label="当前步骤">
-              {{ workflowDetail.currentStep || '-' }}
-            </el-descriptions-item>
-            <el-descriptions-item label="验证模型">
-              {{ workflowDetail.federatedModelAssetName || workflowDetail.clientModelAssetName || '-' }}
-            </el-descriptions-item>
             <el-descriptions-item label="服务端数据集">
               {{ workflowDetail.serverDatasetAssetName || '-' }}
-            </el-descriptions-item>
-            <el-descriptions-item label="联邦状态">
-              {{ workflowDetail.federatedStatus || '-' }}
-            </el-descriptions-item>
-            <el-descriptions-item label="Python 任务 ID">
-              {{ workflowDetail.pythonJobId || '-' }}
-            </el-descriptions-item>
-            <el-descriptions-item label="当前进度">
-              {{ workflowDetail.progress || 0 }}%
             </el-descriptions-item>
           </el-descriptions>
 
@@ -89,8 +67,9 @@ import {
   type ValidationResultView
 } from '../../api/validation'
 import type { WorkflowDetail } from '../../api/workflow'
-import { VALIDATION_COPY_PACK, VALIDATION_STATUS_LABELS, VALIDATION_TEXT } from '../../constants/validation'
+import { VALIDATION_STATUS_LABELS, VALIDATION_TEXT } from '../../constants/validation'
 import { summarizeUiErrorMessage } from '../../utils/errorMessage'
+import { isCurrentRequest } from '../../utils/workflowProgressState'
 
 const route = useRoute()
 const router = useRouter()
@@ -99,6 +78,7 @@ const workflowLoading = ref(false)
 const workflowDetail = ref<WorkflowDetail | null>(null)
 const workflowResultView = ref<ValidationResultView | null>(null)
 let workflowPollTimer: number | null = null
+let workflowRequestSequence = 0
 
 const workflowId = computed(() => {
   const raw = route.query.workflowId
@@ -149,7 +129,7 @@ const workflowValidationResult = computed<StandaloneValidationVO | null>(() => {
     datasetStatus: 'READY',
     datasetSampleCount: undefined,
     datasetImageCount: undefined,
-    algorithmType: workflowDetail.value.yoloVersion || 'YOLO',
+    algorithmType: workflowDetail.value.modelDefinitionFamily || workflowDetail.value.yoloVersion || '未指定',
     status: workflowDetail.value.status,
     progress: workflowDetail.value.progress,
     pythonJobId: workflowDetail.value.pythonJobId,
@@ -167,13 +147,13 @@ function resolveErrorMessage(error: any, fallback: string) {
   return summarizeUiErrorMessage(error?.response?.data?.message || error?.message, fallback)
 }
 
-async function loadWorkflowResultView(id: number) {
+async function loadWorkflowResultView(id: number, requestSequence: number) {
   console.info('[ClientValidationView] 加载工作流结果详情', {
-    workflowId: id,
-    copyPack: VALIDATION_COPY_PACK
+    workflowId: id
   })
   try {
     const res = await getWorkflowValidationResultView(id)
+    if (!isCurrentRequest(requestSequence, workflowRequestSequence) || workflowId.value !== id) return
     workflowResultView.value = res.data
     console.info('[ClientValidationView] 工作流结果详情已加载', {
       workflowId: id,
@@ -181,12 +161,14 @@ async function loadWorkflowResultView(id: number) {
       sampleCount: res.data?.sampleResults?.length || 0
     })
   } catch (error) {
+    if (!isCurrentRequest(requestSequence, workflowRequestSequence) || workflowId.value !== id) return
     workflowResultView.value = null
     console.error('[ClientValidationView] 加载工作流结果详情失败', error)
   }
 }
 
 async function loadWorkflowDetail() {
+  const requestSequence = ++workflowRequestSequence
   if (!isWorkflowMode.value || workflowId.value == null) {
     workflowDetail.value = null
     workflowResultView.value = null
@@ -194,14 +176,16 @@ async function loadWorkflowDetail() {
   }
 
   workflowLoading.value = true
+  const requestedWorkflowId = workflowId.value
   console.info('[ClientValidationView] 加载工作流验证详情', {
-    workflowId: workflowId.value,
-    copyPack: VALIDATION_COPY_PACK
+    workflowId: workflowId.value
   })
   try {
-    const res = await getWorkflowDetailForValidation(workflowId.value)
+    const res = await getWorkflowDetailForValidation(requestedWorkflowId)
+    if (!isCurrentRequest(requestSequence, workflowRequestSequence) || workflowId.value !== requestedWorkflowId) return
     workflowDetail.value = res.data
-    await loadWorkflowResultView(workflowId.value)
+    await loadWorkflowResultView(requestedWorkflowId, requestSequence)
+    if (!isCurrentRequest(requestSequence, workflowRequestSequence) || workflowId.value !== requestedWorkflowId) return
     console.info('[ClientValidationView] 工作流验证详情已加载', {
       workflowId: workflowId.value,
       status: res.data?.status,
@@ -214,13 +198,14 @@ async function loadWorkflowDetail() {
       stopWorkflowPolling()
     }
   } catch (error) {
+    if (!isCurrentRequest(requestSequence, workflowRequestSequence) || workflowId.value !== requestedWorkflowId) return
     const message = resolveErrorMessage(error, VALIDATION_TEXT.workflowLoadFailed)
     console.error('[ClientValidationView] 加载工作流验证详情失败', error)
     ElMessage.error(message)
     workflowDetail.value = null
     workflowResultView.value = null
   } finally {
-    workflowLoading.value = false
+    if (isCurrentRequest(requestSequence, workflowRequestSequence)) workflowLoading.value = false
   }
 }
 
@@ -231,10 +216,15 @@ function startWorkflowPolling() {
   stopWorkflowPolling()
   console.info('[ClientValidationView] 开始轮询工作流验证状态', { workflowId: workflowId.value })
   workflowPollTimer = window.setInterval(async () => {
+    const requestedWorkflowId = workflowId.value
+    if (requestedWorkflowId == null) return
+    const requestSequence = ++workflowRequestSequence
     try {
-      const res = await getWorkflowDetailForValidation(workflowId.value!)
+      const res = await getWorkflowDetailForValidation(requestedWorkflowId)
+      if (!isCurrentRequest(requestSequence, workflowRequestSequence) || workflowId.value !== requestedWorkflowId) return
       workflowDetail.value = res.data
-      await loadWorkflowResultView(workflowId.value!)
+      await loadWorkflowResultView(requestedWorkflowId, requestSequence)
+      if (!isCurrentRequest(requestSequence, workflowRequestSequence) || workflowId.value !== requestedWorkflowId) return
       console.info('[ClientValidationView] 工作流验证轮询', {
         workflowId: workflowId.value,
         status: res.data?.status,
@@ -245,6 +235,7 @@ function startWorkflowPolling() {
         stopWorkflowPolling()
       }
     } catch (error) {
+      if (!isCurrentRequest(requestSequence, workflowRequestSequence) || workflowId.value !== requestedWorkflowId) return
       console.error('[ClientValidationView] 工作流验证轮询失败', error)
     }
   }, 4000)
@@ -261,6 +252,7 @@ watch(workflowId, () => {
   if (isWorkflowMode.value) {
     loadWorkflowDetail()
   } else {
+    workflowRequestSequence++
     stopWorkflowPolling()
     workflowDetail.value = null
     workflowResultView.value = null
@@ -270,8 +262,7 @@ watch(workflowId, () => {
 onMounted(() => {
   console.info('[ClientValidationView] 页面挂载', {
     workflowId: workflowId.value,
-    isWorkflowMode: isWorkflowMode.value,
-    copyPack: VALIDATION_COPY_PACK
+    isWorkflowMode: isWorkflowMode.value
   })
   if (isWorkflowMode.value) {
     loadWorkflowDetail()
@@ -279,6 +270,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  workflowRequestSequence++
   stopWorkflowPolling()
 })
 </script>
